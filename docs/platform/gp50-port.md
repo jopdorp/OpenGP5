@@ -90,6 +90,7 @@ installed by [toolchain setup](setup.md), and Unicorn 2.1 or newer.
 ```sh
 python3 tools/stock_control_emu.py --stock path/to/gp5.zip
 python3 tools/stock_control_emu.py --stock path/to/gp50.zip
+python3 tools/stock_control_emu.py --stock path/to/gp50.zip --stock-radio
 python3 tools/stock_control_emu.py --stock path/to/gp50.zip --gp50-warm-handoff
 python3 tools/stock_dsp_emu.py path/to/gp5.zip > gp5-dsp.json
 python3 tools/stock_dsp_emu.py path/to/gp50.zip > gp50-dsp.json
@@ -104,6 +105,13 @@ the first FreeRTOS task return. Both apps reach board initialization. The
 warm handoff replay checks the stock GP-50's acknowledgment and jump to the
 factory loader with USB emission and delays intercepted. A cold-start recovery
 test still requires the pedal.
+
+The `--stock-radio` check continues through settings and Bluetooth radio
+initialization on both models. It seeds virtual NOR with the stock factory
+presets, models NOR writes and supplies entropy and calibration status. It
+checks settings and Bluetooth configuration records and the stock radio clock
+latch sequence. Discovery, pairing and audio over Bluetooth require radio and
+peer device behavior beyond this fixture.
 
 The DSP harness reports the last write to each register per phase. By default
 it replays selected init routines after the reset checkpoint. With `--runtime`

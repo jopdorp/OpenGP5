@@ -28,6 +28,10 @@ STOCK = {
                        measure=0x5d62e, calibrated=0x5d668, frame=0x5b3b6, iret=0x5b3de,
                        task=0x4b5e6, adc=0x5c53e, board=0x4b5fc, gpio_oe=0x11430080),
 }
+STOCK_RADIO = {
+    "GP-5": (0x4bc6c, 0x6139c, 0x85ad8, 0x5ff28),
+    "GP-50": (0x4b63c, 0x5d40e, 0x81c80, 0x5c0a4),
+}
 
 
 def command(andes, tool, *args):
@@ -36,9 +40,11 @@ def command(andes, tool, *args):
     return result.stdout
 
 
-def checkpoints(andes, elf, commands, expected):
-    flags = [arg for line in [SIM, "load", *commands] for arg in ("-ex", line)]
-    output = command(andes, "gdb", "-nx", "-batch", elf, *flags)
+def checkpoints(andes, elf, commands, expected, sim=SIM):
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "startup.gdb"
+        path.write_text("\n".join([sim, "load", *commands]) + "\n")
+        output = command(andes, "gdb", "-nx", "-batch", elf, "-x", path)
     actual = re.findall(r"^CHECK ([a-z]+) (\d+) (0x[0-9a-f]+) (0x[0-9a-f]+)$", output, re.M)
     if [label for label, _, _, _ in actual] != expected or any(
         correct != "1" or not 0x20000000 <= int(stack, 16) < 0x20050000
@@ -85,7 +91,78 @@ def gp50_warm_handoff():
     return commands
 
 
-def stock(andes, image, warm_handoff=False):
+def stock_radio(model, presets):
+    settings, entropy, clock, wait = STOCK_RADIO[model]
+    # Use the verified stock preset section and erased user storage. Reads use
+    # the stock driver, with the NOR data register fed from the emulated image.
+    # The erase and program operations update only this simulator's memory.
+    commands = [f"restore {presets} binary 0x190000", "set $flash_reads = 0"]
+    for read in (0x1104e, 0x1105e):
+        commands.extend([
+            f"break *{read:#x}", "commands", "silent",
+            "set $offset = $r10 + $r9 - $r6",
+            "if $offset < 0x190000 || $offset + 4 > 0x200000",
+            '  printf "unmodeled NOR read at %#x\\n", $offset', "  quit 1", "end",
+            "set {unsigned int}0x40007000 = *(unsigned int *)$offset",
+            "set $flash_reads = $flash_reads + 1", "continue", "end",
+        ])
+    commands.append(r"""
+break *0x11482
+commands
+  silent
+  if $r0 != 1 || $r1 < 0x190 || $r1 >= 0x200
+    printf "unmodeled NOR erase at sector %#x\n", $r1
+    quit 1
+  end
+  set $address = $r1 << 12
+  set $end = $address + 0x1000
+  while $address < $end
+    set {unsigned int}$address = 0xffffffff
+    set $address = $address + 4
+  end
+  set $r0 = 0
+  set $pc = $lp
+  continue
+end
+break *0x11124
+commands
+  silent
+  if $r0 < 0x190000 || $r0 + $r2 > 0x200000
+    printf "unmodeled NOR program at %#x\n", $r0
+    quit 1
+  end
+  set $i = 0
+  while $i < $r2
+    set {unsigned char}($r0+$i) = *(unsigned char *)($r0+$i) & *(unsigned char *)($r1+$i)
+    set $i = $i + 1
+  end
+  set $r0 = 0
+  set $pc = $lp
+  continue
+end
+""")
+    commands.extend([
+        f"tbreak *{settings:#x}", "continue",
+        check("settings", f"{settings:#x} && $flash_reads == 50 && *(unsigned int *)0x1f3000 == 0x3142564d"),
+        f"tbreak *{entropy:#x}", "continue", check("entropy", hex(entropy)),
+        "set {unsigned int}0x40021068 = *(unsigned int *)0x40021068 | 4",
+        "set {unsigned int}0x4002106c = 0xb583d921",
+        # Supply completion bits polled by the stock calibration code.
+        "set {unsigned short}0x40009154 = 1",
+        "set {unsigned short}0x40009008 = 3",
+        "set {unsigned short}0x40009564 = 8",
+        "set {unsigned short}0x400095ec = 1",
+        "set $clock_reads = 0",
+        f"break *{clock:#x}", "commands", "silent",
+        "set {unsigned int}0x4000801c = *(unsigned int *)0x4000801c & 0x7fffffff",
+        "set $clock_reads = $clock_reads + 1", "continue", "end",
+        f"tbreak *{wait:#x}", "continue",
+        check("radio", f"{wait:#x} && $clock_reads == 2 && *(unsigned int *)0x1ff00c == 0x352d5047"),
+    ])
+    return commands
+
+
+def stock(andes, image, warm_handoff=False, radio=False):
     model, app = htfw.read_section(image, 0x62)
     boot = STOCK.get(model)
     if boot is None or sha256(app).hexdigest() != boot.sha256:
@@ -130,10 +207,18 @@ def stock(andes, image, warm_handoff=False):
             check("board", f"{boot.board:#x} && *(unsigned int *)0x40010018 == {boot.gpio_oe:#x}"),
         ]
         expected = ["tlb", "efuse", "pll", "audiopll", "calibrated", "scheduler", "task", "adc", "board"]
+        sim = SIM
+        if radio:
+            _, presets = htfw.read_section(image, 0x65)
+            flash = stub / "flash.bin"
+            flash.write_bytes(presets.ljust(0x70000, b"\xff"))
+            sim += " --memory-region 0x80000000,0x10000"
+            commands.extend(stock_radio(model, flash))
+            expected.extend(["settings", "entropy", "radio"])
         if warm_handoff:
             commands.extend(gp50_warm_handoff())
             expected.extend(["ack", "delayone", "delaytwo", "handoff"])
-        checkpoints(andes, stub / "app.elf", commands, expected)
+        checkpoints(andes, stub / "app.elf", commands, expected, sim)
 
 
 def open_elf_tlb(andes, elf, gp50=False):
@@ -235,14 +320,19 @@ def main():
     source.add_argument("--open-elf", type=Path, help="OpenGP5 app.elf linked without EX9 relaxation")
     source.add_argument("--gp50-app", type=Path, help="GP-50 app.elf from the emulator build")
     parser.add_argument("--andes-bin", type=Path, default=ANDES)
-    parser.add_argument("--gp50-warm-handoff", action="store_true",
-                        help="replay the stock GP-50 update-mode request up to the factory-loader jump")
+    stock_mode = parser.add_mutually_exclusive_group()
+    stock_mode.add_argument("--gp50-warm-handoff", action="store_true",
+                            help="replay the stock GP-50 update-mode request up to the factory-loader jump")
+    stock_mode.add_argument("--stock-radio", action="store_true",
+                            help="continue stock startup through modeled settings flash and Bluetooth radio setup")
     args = parser.parse_args()
     if args.gp50_warm_handoff and not args.stock:
         parser.error("--gp50-warm-handoff requires --stock")
+    if args.stock_radio and not args.stock:
+        parser.error("--stock-radio requires --stock")
     try:
         if args.stock:
-            stock(args.andes_bin, args.stock, args.gp50_warm_handoff)
+            stock(args.andes_bin, args.stock, args.gp50_warm_handoff, args.stock_radio)
         elif args.gp50_app:
             gp50_app(args.andes_bin, args.gp50_app)
         else:
