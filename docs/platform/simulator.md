@@ -1,7 +1,7 @@
 # The simulator
 
-`tools/simulate.py` runs both halves of a build on your computer. It has no live window.
-It reads a control script and saves screen images and sound files. It covers:
+`tools/simulate.py` runs both halves of a build on your computer. The scripted
+mode reads a control script and saves screen images and sound files. It covers:
 
 - both chips' code;
 - the audio link between them;
@@ -19,6 +19,23 @@ python3 tools/simulate.py tremolo --script controls.txt --in guitar.wav --out ou
 
 Without `--in` it plays a plucked test tone for 4 s. Screens go to `build/sim/<id>/` (`end.png` is the screen at the
 end) and the sound to `build/sim/<id>.wav`.
+
+## Live GP-50 window
+
+On Linux, install the SDL2 (2.0.18 or later), JACK and libsamplerate development
+libraries and `pkg-config`. Run the simulator under PipeWire's JACK client
+wrapper, or omit `pw-jack` when running a JACK server directly.
+
+```sh
+pw-jack python3 tools/simulate.py tremolo --gp50 --live
+```
+
+Scroll or drag on the encoders, or click their `−` and `+` sides. The buttons
+send press and release events to the simulated firmware. In Helvum, qpwgraph,
+or a JACK patchbay, connect your source to `OpenGP5 GP-50:in` and connect
+`out_l` and `out_r` to your monitor or recorder. The app leaves the ports
+unconnected at startup. It processes audio at the firmware's sample rate and
+resamples when the audio graph uses a different rate.
 
 ## A script
 

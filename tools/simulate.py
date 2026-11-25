@@ -25,12 +25,13 @@ No pedal needed (docs/platform/simulator.md).
   --check         build with the address and undefined-behaviour checkers: a crash or a bad memory access stops
                   with the line it happened on (slower)
   --gp50          160 x 128 screen and extra inputs, e.g. "left turn 2", "save click", "fs2 down"
+  --live          open the GP-50 window with JACK audio ports (requires --gp50)
 The log (gp5_log on either processor) and the LEDs print as the run goes. The timing is the pedal's: 64-sample
 blocks, fw_tick every 10 ms, the PARA hold at 0.6 s, the audio link's words three blocks on. The arithmetic is the
 pedal's maths code compiled for the computer; cycle counts are not simulated (gp5_link.py status on the pedal).
 Needs a C compiler (cc); Pillow for PNG screens (else they stay .ppm).
 """
-import argparse, array, math, os, pathlib, re, struct, subprocess, sys, tempfile, wave
+import argparse, array, math, os, pathlib, re, shlex, struct, subprocess, sys, tempfile, wave
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -110,11 +111,20 @@ def events(script, names, choices, shown, gp50=False):
     return sorted(out, key=lambda e: e[0])
 
 
-def build(fw, m, d, check=False, gp50=False):
+def build(fw, m, d, check=False, gp50=False, live=False):
     plat = ROOT / "platform"
     flags = manifest.flags(m, fw) + (["-DGP50_BOARD=1"] if gp50 else [])
+    sources, libraries = [], []
+    if live:
+        try:
+            libraries = shlex.split(subprocess.check_output(
+                ["pkg-config", "--cflags", "--libs", "jack", "samplerate", "sdl2"], text=True))
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            sys.exit("live mode needs pkg-config and the JACK, libsamplerate, and SDL2 development libraries")
+        flags.append("-DSIM_LIVE")
+        sources = [str(plat / f"host/{name}.c") for name in ("live", "live_ui")]
     lib, exe = d / "sim_dsp.so", d / "sim"
-    cc = ["cc", "-std=gnu99", "-Wall", "-Wno-unused-function", "-Werror=implicit-function-declaration", "-fno-builtin", "-g", *flags,
+    cc = ["cc", "-std=gnu11" if live else "-std=gnu99", "-Wall", "-Wno-unused-function", "-Werror=implicit-function-declaration", "-fno-builtin", "-g", *flags,
           *(["-fsanitize=address,undefined", "-fno-sanitize=shift-base", "-fno-omit-frame-pointer"] if check else [])]
     subprocess.run([*cc, "-O2", "-fPIC", "-shared", "-fvisibility=hidden", "-DGP5_HOST", f"-I{fw / 'dsp'}", f"-I{fw}",
                     f"-I{plat / 'dsp'}", str(plat / "host/sim_dsp.c"), str(plat / "dsp/gp5_math.c"), "-o", str(lib)], check=True)
@@ -122,9 +132,9 @@ def build(fw, m, d, check=False, gp50=False):
     math_inline = any('#include "gp5_math.c"' in c.read_text(errors="replace") for c in ctl)
     subprocess.run([*cc, "-O1", "-DGP5_HOST", "-DUI_PANEL", "-DGP5_CTL_SIDE", f"-I{plat / 'nds32'}", f"-I{plat / 'host/include'}",
                     f"-I{plat / 'dsp'}", f"-I{fw}", f"-I{fw / 'nds32'}", str(plat / "host/sim.c"), str(plat / "nds32/gp5_params.c"),
-                    str(plat / "nds32/gp5_ui.c"), str(plat / "nds32/text.c"), *map(str, ctl),
+                    str(plat / "nds32/gp5_ui.c"), str(plat / "nds32/text.c"), *map(str, ctl), *sources,
                     *([] if math_inline else [str(plat / "dsp/gp5_math.c")]), "-lm", *(["-ldl"] if sys.platform.startswith("linux") else []),
-                    "-o", str(exe)], check=True)
+                    *libraries, "-o", str(exe)], check=True)
     return lib, exe
 
 
@@ -136,12 +146,21 @@ def main():
     ap.add_argument("--shots"); ap.add_argument("--knob", type=int, default=255)
     ap.add_argument("--store"); ap.add_argument("--files")
     ap.add_argument("--gp50", action="store_true", help="simulate the GP-50 screen size and inputs")
+    ap.add_argument("--live", action="store_true", help="open a GP-50 window and JACK audio ports")
     ap.add_argument("--check", action="store_true", help="build with the address and undefined-behaviour checkers")
     a = ap.parse_args()
     fw = firmware_dir(a.firmware).resolve()
     try: m = manifest.load(fw)
     except manifest.ManifestError as e: sys.exit(str(e))
     if not m: sys.exit(f"{fw}: no firmware.json (the simulator runs OpenGP5 1.0 firmwares)")
+    if a.live:
+        if not a.gp50:
+            ap.error("--live requires --gp50")
+        if any((a.inp, a.out, a.script, a.seconds, a.shots, a.tone, a.store, a.files, a.knob != 255)):
+            ap.error("--live takes input from the window and JACK. Use offline options without --live.")
+        with tempfile.TemporaryDirectory(prefix="opengp5-live-") as d:
+            lib, exe = build(fw, m, pathlib.Path(d), a.check, a.gp50, a.live)
+            return subprocess.call([str(exe), str(lib), m["name"]])
     rate = m["audio"]["sample_rate"]
     names, choices, shown = param_names(fw)
     script = pathlib.Path(a.script).read_text() if a.script else ""
@@ -184,4 +203,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

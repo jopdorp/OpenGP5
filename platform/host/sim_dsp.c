@@ -17,18 +17,26 @@ static const uint32_t *clock_ms;                     /* the simulation's time, f
 
 __attribute__((unused)) static void gp5_reply(const uint8_t *p, uint32_t n)
 {
+#ifdef SIM_LIVE
+    (void)p; (void)n;
+#else
     fprintf(stderr, "dsp reply:");
     for (uint32_t i = 0; i < n; i++) fprintf(stderr, " %02x", p[i]);
     fprintf(stderr, "\n");
+#endif
 }
 __attribute__((unused)) static void gp5_ack(void) {}
 static void gp5_log(const char *fmt, ...)
 {
+#ifdef SIM_LIVE
+    (void)fmt;
+#else
     char line[112];
     va_list ap;
     uint32_t ms = clock_ms ? *clock_ms : 0u;
     va_start(ap, fmt); gp5_vfmt(line, sizeof line, fmt, ap); va_end(ap);   /* the pedal's printf, not the computer's */
     fprintf(stderr, "[%5u.%03u] dsp: %s\n", ms / 1000u, ms % 1000u, line);
+#endif
 }
 __attribute__((unused)) static uint32_t gp5_get32(const uint8_t *p)
 {

@@ -24,6 +24,7 @@
 #include "gp5_firmware.h"
 #include "gp5_fmt.h"
 #include "gp5_font.h"
+#include "live.h"
 #ifdef GP5_HAS_PARAMS
 #include "gp5_params.h"
 void gp5_params_init(void);
@@ -77,10 +78,14 @@ void gp5_led(uint32_t c) { led = c; }
 /* ---- log ---- */
 void gp5_log(const char *fmt, ...)
 {
+#ifdef SIM_LIVE
+    (void)fmt;
+#else
     char line[112];
     va_list ap;
     va_start(ap, fmt); gp5_vfmt(line, sizeof line, fmt, ap); va_end(ap);
     fprintf(stderr, "[%5u.%03u] %s\n", now_ms / 1000u, now_ms % 1000u, line);
+#endif
 }
 
 /* ---- screen ---- */
@@ -116,6 +121,20 @@ void gp5_text(unsigned line, const char *s)          /* the built-in 5x7 font, 2
         gp5_blit(2 + c * 12, line * 16, 12, 16, cell);
     }
 }
+static uint32_t screen_pixel(uint16_t pixel)
+{
+    /* UI_PANEL stores byte-swapped BGR565. */
+    unsigned v = (uint16_t)((pixel >> 8) | (pixel << 8));
+    unsigned b = v >> 11, g = (v >> 5) & 63, r = v & 31;
+    return ((r << 3 | r >> 2) << 16) | ((g << 2 | g >> 4) << 8) | (b << 3 | b >> 2);
+}
+
+void sim_screen(uint32_t *pixels, uint32_t *color)
+{
+    for (unsigned i = 0; i < GP5_SCREEN_W * GP5_SCREEN_H; i++) pixels[i] = screen_pixel(fb[i]);
+    *color = led;
+}
+
 static void shot(const char *dir, const char *name)
 {
     char p[1024];
@@ -123,9 +142,9 @@ static void shot(const char *dir, const char *name)
     snprintf(p, sizeof p, "%s/%s.ppm", dir, name);
     if (!(f = fopen(p, "wb"))) { fprintf(stderr, "can't write %s\n", p); return; }
     fprintf(f, "P6 %d %d 255\n", GP5_SCREEN_W, GP5_SCREEN_H);
-    for (int i = 0; i < GP5_SCREEN_W * GP5_SCREEN_H; i++) {      /* the panel's pixels (UI_PANEL): blue in the top bits */
-        unsigned v = (uint16_t)((fb[i] >> 8) | (fb[i] << 8)), b = v >> 11, g = (v >> 5) & 63, r = v & 31;
-        fputc((int)(r << 3 | r >> 2), f); fputc((int)(g << 2 | g >> 4), f); fputc((int)(b << 3 | b >> 2), f);
+    for (unsigned i = 0; i < GP5_SCREEN_W * GP5_SCREEN_H; i++) {
+        uint32_t pixel = screen_pixel(fb[i]);
+        fputc(pixel >> 16, f); fputc((pixel >> 8) & 255, f); fputc(pixel & 255, f);
     }
     fclose(f);
 }
@@ -233,43 +252,128 @@ static const char *led_text(uint32_t c, char *b)
     return b;
 }
 
-int main(int argc, char **argv)
+static unsigned words, rate, para_down, para_held, force = 1;
+static uint32_t para_t0, next_tick = 10, blocks;
+static int early;
+
+int sim_open(const char *dsp_path)
 {
-    void *lib;
-    FILE *ev, *fin, *fout;
-    static int32_t in[BLOCK], l[BLOCK], r[BLOCK], out[2 * BLOCK];
-    static int32_t ctl_in[512], ctl_out[512], delay[LINK_DELAY + 1][512], zero[512];
-    char line[256], name[200];
-    long next_ms = -1; char next_op[32] = ""; long a1 = 0, a2 = 0;
-    unsigned words, rate, para_down = 0, para_held = 0, force = 1;
-    int early;
-    uint32_t para_t0 = 0, next_tick = 10, shown_led = 0xFFFFFFFFu, blocks = 0, total;
-    double seconds;
-    if (argc != 9) { fprintf(stderr, "usage: sim <dsp library> <events> <in.raw> <out.raw> <shot dir> <seconds> <store|-> <files|->\n"); return 2; }
-    if (!(lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL))) { fprintf(stderr, "%s\n", dlerror()); return 2; }
+    void *lib = dlopen(dsp_path, RTLD_NOW | RTLD_LOCAL);
+    if (!lib) { fprintf(stderr, "%s\n", dlerror()); return 2; }
     *(void **)&dsp_init = dlsym(lib, "sim_dsp_init"); *(void **)&dsp_command = dlsym(lib, "sim_dsp_command");
     *(void **)&dsp_block = dlsym(lib, "sim_dsp_block"); *(void **)&dsp_link = dlsym(lib, "sim_dsp_link");
     *(void **)&dsp_link_words = dlsym(lib, "sim_dsp_link_words"); *(void **)&dsp_link_early = dlsym(lib, "sim_dsp_link_early"); *(void **)&dsp_rate = dlsym(lib, "sim_dsp_sample_rate");
     if (!dsp_init || !dsp_link_early || !dsp_command || !dsp_block || !dsp_link || !dsp_link_words || !dsp_rate) { fprintf(stderr, "not a sim_dsp library\n"); return 2; }
     words = dsp_link_words(); rate = dsp_rate(); early = dsp_link_early(0);
     if (words > 512u) words = 512u;
-    ev = fopen(argv[2], "r"); fin = fopen(argv[3], "rb"); fout = fopen(argv[4], "wb");
-    if (!ev || !fin || !fout) { fprintf(stderr, "can't open the events, in or out file\n"); return 2; }
-    seconds = atof(argv[6]);
-    total = (uint32_t)(seconds * rate / BLOCK + 0.5);
-    if (strcmp(argv[7], "-")) store_file(argv[7], 0);
-    if (strcmp(argv[8], "-")) { files_dir = argv[8]; load_files(); }
-
-    /* start-up, as the pedal: parameters (saved values), the DSP, the firmware */
 #ifdef GP5_HAS_PARAMS
     gp5_params_init();
 #endif
     dsp_init(&now_ms);
     fw_init();
     fw_dsp_ready();
+    return 0;
+}
 
-    for (blocks = 0; blocks < total; blocks++) {
-        now_ms = (uint32_t)((uint64_t)blocks * BLOCK * 1000u / rate);
+unsigned sim_rate(void) { return rate; }
+
+void sim_control(enum sim_control control, int value)
+{
+    switch (control) {
+    case SIM_FS1:
+        if (value) fw_foot_down(); else fw_foot_up();
+        break;
+    case SIM_PARA_PRESS:
+        if (value) {
+            para_down = 1;
+            para_held = 0;
+            para_t0 = now_ms;
+            fw_para_down();
+        } else {
+            if (para_down && !para_held) fw_para_click();
+            para_down = 0;
+            fw_para_up();
+        }
+        break;
+    case SIM_PARA: fw_para_turn(value); break;
+    case SIM_VOLUME: knob = (unsigned)(value < 0 ? 0 : value > 255 ? 255 : value); break;
+#ifdef GP50_BOARD
+    case SIM_LEFT: case SIM_MIDDLE: case SIM_RIGHT:
+        fw_gp50_encoder_turn(control - SIM_LEFT, value);
+        break;
+    case SIM_DRUM: case SIM_EXIT: case SIM_GLOBAL: case SIM_SAVE:
+        fw_gp50_button(control - SIM_DRUM, value);
+        break;
+    case SIM_FS2: fw_gp50_button(4, value); break;
+#endif
+    default: break;
+    }
+}
+
+void sim_block(const int32_t *in, int32_t *out)
+{
+    static int32_t l[BLOCK], r[BLOCK];
+    static int32_t ctl_in[512], ctl_out[512], delay[LINK_DELAY + 1][512], zero[512];
+    static int32_t g_now;
+
+    while (next_tick <= now_ms) {
+        fw_tick();
+        if (para_down && !para_held && now_ms - para_t0 >= 600u) { para_held = 1; fw_para_hold(); }
+        next_tick += 10u;
+    }
+
+    uint32_t id, v;
+#ifdef GP5_HAS_PARAMS
+    gp5_params_poll();
+    while (gp5_params_take(&id, &v)) send_setting(id, v);
+#endif
+    while (fw_take(&id, &v)) send_setting(id, v);
+    for (unsigned k = 0; k < 8u; k++) {          /* one call is one main-loop pass on the pedal */
+        int forced = force;
+        blit_bytes = 0;
+        int more = fw_draw(force);
+        force = 0;
+        if (forced) { if (blit_bytes > blit_first) blit_first = blit_bytes; }
+        else if (blit_bytes > blit_most) blit_most = blit_bytes;
+        if (!more) break;
+    }
+
+    if (link_cb) memcpy(dsp_link(0), blocks >= LINK_DELAY ? delay[(blocks - LINK_DELAY) % (LINK_DELAY + 1u)] : zero, words * 4u);
+    if (link_cb && early) { dsp_link_early(in); exchange(words, blocks, ctl_in, ctl_out, delay); }
+    dsp_block(in, l, r);
+
+    /* The pedal glides its output level by at most 4096 Q16 units per block. */
+    unsigned lv = level_owned ? level : knob;
+    int32_t g = (int32_t)(lv * 65536u / 255u), d = g - g_now;
+    if (d > 4096) d = 4096; else if (d < -4096) d = -4096;
+    for (unsigned i = 0; i < BLOCK; i++) {
+        int32_t gi = g_now + (d * (int32_t)(i + 1)) / 64;
+        out[2 * i] = (int32_t)(((int64_t)l[i] * gi) >> 16);
+        out[2 * i + 1] = (int32_t)(((int64_t)r[i] * gi) >> 16);
+    }
+    g_now += d;
+    if (link_cb && !early) exchange(words, blocks, ctl_in, ctl_out, delay);
+    blocks++;
+    now_ms = (uint32_t)((uint64_t)blocks * BLOCK * 1000u / rate);
+}
+
+#ifndef SIM_LIVE
+int main(int argc, char **argv)
+{
+    FILE *ev, *fin, *fout;
+    int32_t in[BLOCK], out[2 * BLOCK];
+    char line[256], name[200];
+    long next_ms = -1; char next_op[32] = ""; long a1 = 0, a2 = 0;
+    uint32_t shown_led = 0xFFFFFFFFu;
+    if (argc != 9) { fprintf(stderr, "usage: sim <dsp library> <events> <in.raw> <out.raw> <shot dir> <seconds> <store|-> <files|->\n"); return 2; }
+    ev = fopen(argv[2], "r"); fin = fopen(argv[3], "rb"); fout = fopen(argv[4], "wb");
+    if (!ev || !fin || !fout) { fprintf(stderr, "can't open the events, in or out file\n"); return 2; }
+    if (strcmp(argv[7], "-")) store_file(argv[7], 0);
+    if (strcmp(argv[8], "-")) { files_dir = argv[8]; load_files(); }
+    if (sim_open(argv[1])) return 2;
+    uint32_t total = (uint32_t)(atof(argv[6]) * rate / BLOCK + 0.5);
+
+    while (blocks < total) {
         /* events due */
         for (;;) {
             if (next_ms < 0) {
@@ -280,16 +384,16 @@ int main(int argc, char **argv)
                 else sscanf(line, "%*ld %*s %ld %ld", &a1, &a2);
             }
             if (next_ms > (long)now_ms) break;
-            if (!strcmp(next_op, "foot_down")) fw_foot_down();
-            else if (!strcmp(next_op, "foot_up")) fw_foot_up();
-            else if (!strcmp(next_op, "para_down")) { para_down = 1; para_held = 0; para_t0 = now_ms; fw_para_down(); }
-            else if (!strcmp(next_op, "para_up")) { if (para_down && !para_held) fw_para_click(); para_down = 0; fw_para_up(); }
-            else if (!strcmp(next_op, "turn")) fw_para_turn((int)a1);
+            if (!strcmp(next_op, "foot_down")) sim_control(SIM_FS1, 1);
+            else if (!strcmp(next_op, "foot_up")) sim_control(SIM_FS1, 0);
+            else if (!strcmp(next_op, "para_down")) sim_control(SIM_PARA_PRESS, 1);
+            else if (!strcmp(next_op, "para_up")) sim_control(SIM_PARA_PRESS, 0);
+            else if (!strcmp(next_op, "turn")) sim_control(SIM_PARA, (int)a1);
 #ifdef GP50_BOARD
-            else if (!strcmp(next_op, "encoder")) fw_gp50_encoder_turn((unsigned)a1, (int)a2);
-            else if (!strcmp(next_op, "button")) fw_gp50_button((unsigned)a1, (int)a2);
+            else if (!strcmp(next_op, "encoder")) sim_control(SIM_LEFT + a1, (int)a2);
+            else if (!strcmp(next_op, "button")) sim_control(a1 == 4 ? SIM_FS2 : SIM_DRUM + a1, (int)a2);
 #endif
-            else if (!strcmp(next_op, "knob")) knob = (unsigned)(a1 < 0 ? 0 : a1 > 255 ? 255 : a1);
+            else if (!strcmp(next_op, "knob")) sim_control(SIM_VOLUME, (int)a1);
 #ifdef GP5_HAS_PARAMS
             else if (!strcmp(next_op, "set")) { if (a1 < GP5_NPARAMS) gp5_params_set_outside((unsigned)a1, (int32_t)a2); else fw_param_set((uint32_t)a1, (uint32_t)a2); }
             else if (!strcmp(next_op, "preset_load")) gp5_preset_load((unsigned)a1);
@@ -302,52 +406,16 @@ int main(int argc, char **argv)
             else fprintf(stderr, "unknown event '%s'\n", next_op);
             next_ms = -1;
         }
-        /* the 10 ms clock */
-        while (next_tick <= now_ms) {
-            fw_tick();
-            if (para_down && !para_held && now_ms - para_t0 >= 600u) { para_held = 1; fw_para_hold(); }
-            next_tick += 10u;
-        }
-        /* the main loop: settings to the DSP, then the screen */
-        {
-            uint32_t id, v;
-#ifdef GP5_HAS_PARAMS
-            gp5_params_poll();
-            while (gp5_params_take(&id, &v)) send_setting(id, v);
-#endif
-            while (fw_take(&id, &v)) send_setting(id, v);
-            for (unsigned k = 0; k < 8u; k++) {          /* (one call is one main-loop pass on the pedal) */
-                int more;
-                int forced = force;
-                blit_bytes = 0; more = fw_draw(force); force = 0;
-                if (forced) { if (blit_bytes > blit_first) blit_first = blit_bytes; }
-                else if (blit_bytes > blit_most) blit_most = blit_bytes;
-                if (!more) break;
-            }
-        }
-        if (led != shown_led) { char b[32]; fprintf(stderr, "[%5u.%03u] LEDs: %s\n", now_ms / 1000u, now_ms % 1000u, led_text(led, b)); shown_led = led; }
-        /* the DSP's block */
         size_t got = fread(in, sizeof in[0], BLOCK, fin);
         if (got < BLOCK) memset(in + got, 0, (BLOCK - got) * sizeof in[0]);
-        if (link_cb) memcpy(dsp_link(0), blocks >= LINK_DELAY ? delay[(blocks - LINK_DELAY) % (LINK_DELAY + 1u)] : zero, words * 4u);
-        if (link_cb && early) { dsp_link_early(in); exchange(words, blocks, ctl_in, ctl_out, delay); }   /* at the block's start */
-        dsp_block(in, l, r);
-        {
-            /* as on the pedal (platform/dsp/audio.h): the level glides, at most 4096 (Q16) a block, from 0 at start */
-            static int32_t g_now;
-            unsigned lv = level_owned ? level : knob;
-            int32_t g = (int32_t)(lv * 65536u / 255u), d = g - g_now;
-            if (d > 4096) d = 4096; else if (d < -4096) d = -4096;
-            for (unsigned i = 0; i < BLOCK; i++) {
-                int32_t gi = g_now + (d * (int32_t)(i + 1)) / 64;
-                out[2 * i] = (int32_t)(((int64_t)l[i] * gi) >> 16);
-                out[2 * i + 1] = (int32_t)(((int64_t)r[i] * gi) >> 16);
-            }
-            g_now += d;
+        uint32_t ms = now_ms;
+        sim_block(in, out);
+        if (led != shown_led) {
+            char b[32];
+            fprintf(stderr, "[%5u.%03u] LEDs: %s\n", ms / 1000u, ms % 1000u, led_text(led, b));
+            shown_led = led;
         }
         fwrite(out, sizeof out[0], 2 * BLOCK, fout);
-        /* the audio link's exchange */
-        if (link_cb && !early) exchange(words, blocks, ctl_in, ctl_out, delay);                         /* after the block */
     }
     while (fw_draw(force)) force = 0;
     shot(argv[5], "end");
@@ -357,3 +425,4 @@ int main(int argc, char **argv)
     fclose(fout);
     return 0;
 }
+#endif
