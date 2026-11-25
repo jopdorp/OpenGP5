@@ -157,3 +157,21 @@ python3 tools/simulate.py tremolo --gp50 --script controls.txt
 The emulator build uses one cold-start control output pattern. The power-state
 transitions, analog input and output routing, MIDI and USB behavior, and the
 cold-start recovery path still need physical verification.
+
+### Processor link and USB
+
+A separate register-level replay used the two compiled GP-50 tremolo binaries.
+The control UART0 generated a version request, the DSP UART1 returned the version
+frame, and the control firmware accepted it with zero receive errors. The emulators
+exchanged captured UART bytes and supplied the receive interrupts.
+
+In a modeled USB controller, the compiled control firmware answered SETUP
+requests with its device, configuration and GP-50 string descriptors. It
+configured 64-byte bulk MIDI endpoints `0x03` and `0x82` and answered an
+OpenGP5 version request. USB bus timing and host enumeration require a device
+test. The emulator target covers USB MIDI. Stock USB audio also uses an SPI and
+DMA link between the processors and separate isochronous USB endpoints.
+
+The stock control firmware also contains Bluetooth A2DP audio and BLE/GATT
+command handling. The wireless and USB transports share the stock command
+dispatcher. Bluetooth audio and BLE editing are separate porting work.
