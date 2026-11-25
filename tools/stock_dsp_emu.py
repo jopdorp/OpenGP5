@@ -3,10 +3,10 @@
 
 Supply an official Valeton update (.bin or .zip). Needs Unicorn 2.1 or later.
 By default, stop reset before serial flash transactions and trace the UART and
-audio init routines in isolation. With --runtime, boot to the main loop and
-send a version query using the stock UART handlers. The runtime fixture stubs
-serial flash writes, provides factory section 0x67, and fast-forwards delays.
-It does not simulate audio samples or the factory loader.
+audio init routines in isolation. With --runtime, boot to the main loop,
+query the stock UART version, and run a tone through the stock audio handlers.
+The runtime fixture stubs serial flash writes, provides factory section 0x67,
+and fast-forwards delays. The tone test supplies DMA and interrupt events.
 Each MMIO value in the report is the last write to that address in its phase.
 """
 
@@ -14,6 +14,7 @@ import argparse
 from collections import deque
 from hashlib import sha256
 import json
+from math import sin, tau
 from pathlib import Path
 import struct
 import zipfile
@@ -92,9 +93,10 @@ def trace(model, section, factory_data=None):
 
     if factory_data is not None:
         writes.clear()
-        main_loop, reply = version_query(cpu, model, section, run, checkpoint)
+        main_loop, reply, peak, muted_peak = runtime(cpu, model, section, run, checkpoint)
         return {"model": model, "reset_checkpoint": hex(checkpoint), "main_loop": hex(main_loop),
                 "boot": boot_writes, "runtime": writes, "version_reply": reply.hex(" "),
+                "audio_peak": peak, "muted_peak": muted_peak,
                 "i2c_wire_bytes": [data.hex(" ") for data in i2c]}
 
     def call(address):
@@ -110,7 +112,7 @@ def trace(model, section, factory_data=None):
             "uart": uart_writes, "audio": audio_writes, "i2c_wire_bytes": [data.hex(" ") for data in i2c]}
 
 
-def version_query(cpu, model, section, run, checkpoint):
+def runtime(cpu, model, section, run, checkpoint):
     from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
     from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1
 
@@ -158,6 +160,24 @@ def version_query(cpu, model, section, run, checkpoint):
     def frame(payload):
         return struct.pack("<BHB", crc8(payload), len(payload) + 4, 1) + payload
 
+    def step_main(count=10_000):
+        cpu.emu_start(cpu.reg_read(UC_ARM_REG_PC) | 1, 0, count=count)
+
+    def send(payload):
+        tx.clear()
+        rx.extend(frame(payload))
+        irq(rx_vector)
+        step_main(100_000)
+        irq(rx_vector - 1)
+        if rx:
+            raise ValueError(f"{model} left {len(rx)} bytes in the UART FIFO")
+        return bytes(tx)
+
+    def expect_ack(payload):
+        reply = send(payload)
+        if reply != b"\x01\x04\x00\x14":
+            raise ValueError(f"{model} rejected {payload.hex(' ')}: {reply.hex(' ')}")
+
     for pc in waits:
         cpu.hook_add(UC_HOOK_CODE, delay, begin=pc, end=pc)
     cpu.hook_add(UC_HOOK_MEM_READ, flash_read, begin=sfi, end=sfi + 0x100)
@@ -166,19 +186,63 @@ def version_query(cpu, model, section, run, checkpoint):
     cpu.hook_add(UC_HOOK_MEM_WRITE, uart_write, begin=uart, end=uart)
 
     run(checkpoint, main_loop, 5_000_000)
-    rx.extend(frame(struct.pack("<HHI", 0x6000, 8, 0)))
-    irq(rx_vector)
-    cpu.emu_start(main_loop | 1, 0, count=10_000)
-    irq(rx_vector - 1)
-    if rx or tx != frame(struct.pack("<HHII", 0x6000, 12, 1, version)):
-        raise ValueError(f"unexpected {model} UART version reply: {tx.hex(' ')}")
-    return main_loop, tx
+    reply = send(struct.pack("<HHI", 0x6000, 8, 0))
+    if reply != frame(struct.pack("<HHII", 0x6000, 12, 1, version)):
+        raise ValueError(f"unexpected {model} UART version reply: {reply.hex(' ')}")
+    expect_ack(struct.pack("<HHIf", 0x1001, 12, 0, 1.0))  # output level
+    expect_ack(struct.pack("<HHIf", 0x1001, 12, 4, 1.0))  # second stock gain
+    expect_ack(struct.pack("<HHII", 0x0002, 12, 0, 100))  # preset level
+    expect_ack(struct.pack("<HHII", 0x0002, 12, 1, 120))  # BPM
+    expect_ack(struct.pack("<HHI", 0x6003, 8, 3))         # run
+    peak = tone_replay(cpu, irq, step_main)
+    expect_ack(struct.pack("<HHIf", 0x1001, 12, 0, 0.0))
+    muted_peak = tone_replay(cpu, irq, step_main)
+    if peak < (1 << 20) or muted_peak > 1:
+        raise ValueError(f"{model} audio level check failed: active {peak}, muted {muted_peak}")
+    return main_loop, reply, peak, muted_peak
+
+
+def tone_replay(cpu, irq, step_main):
+    dma, icsr = 0x40030000, 0xE000ED04
+
+    def word(address):
+        return struct.unpack("<I", cpu.mem_read(address, 4))[0]
+
+    def poke(address, value):
+        cpu.mem_write(address, struct.pack("<I", value))
+
+    peak = 0
+    for block in range(100):
+        in_a, in_b, out_l, out_r = (word(dma + off) for off in (0x14C, 0x16C, 0x108, 0x128))
+        # Use the DMA descriptors so the stock code picks the buffer half.
+        tone = [int(0.15 * (1 << 31) * sin(tau * 440 * i / 44_100))
+                for i in range(block * 64, (block + 1) * 64)]
+        cpu.mem_write(in_a, bytes(256))
+        cpu.mem_write(in_b, struct.pack("<64i", *tone))
+        poke(dma, 1)
+        poke(dma + 4, 15)
+        poke(dma + 8, 0)
+        irq(49)
+        if word(dma + 8) != 15 or word(icsr) != 1 << 28:
+            raise ValueError("audio DMA did not acknowledge completion and pend audio processing")
+        poke(dma, 0)
+        poke(dma + 4, 0)
+        poke(icsr, 0)
+        irq(14)  # PendSV runs the stock audio block
+        irq(15)  # advance the stock timer fixture
+        step_main()
+        if block >= 90:  # sample after the stock level ramp has settled
+            left = cpu.mem_read(out_l, 256)
+            if left != cpu.mem_read(out_r, 256):
+                raise ValueError("stock mono audio did not match on both outputs")
+            peak = max(peak, max(map(abs, struct.unpack("<64i", left))))
+    return peak
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path, help="official Valeton firmware archive or image")
-    parser.add_argument("--runtime", action="store_true", help="run the stock UART version query")
+    parser.add_argument("--runtime", action="store_true", help="run stock UART and audio checks")
     args = parser.parse_args()
     try:
         model, section = stock_section(args.image)

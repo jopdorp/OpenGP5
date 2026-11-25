@@ -2,8 +2,8 @@
 
 These findings compare the official GP-5 V1.0.6 and GP-50 V1.0.5 updates. The Andes
 instruction simulator ran the stock LCD, PWM and control input routines. Unicorn
-ran both stock DSPs through startup to a UART version reply with modeled flash,
-codec and interrupt behavior. The findings describe the firmware's register
+ran both stock DSPs through startup, UART and an audio tone with modeled flash,
+codec, DMA and interrupt behavior. The findings describe the firmware's register
 behavior. Board traces, analog behavior, complete stock boot and recovery still
 need verification.
 
@@ -107,9 +107,12 @@ test still requires the pedal.
 
 The DSP harness reports the last write to each register per phase. By default
 it replays selected init routines after the reset checkpoint. With `--runtime`
-it runs the stock DSP main loop and feeds a version query through its UART
-interrupt handlers. The flash and codec model uses virtual state, and the
-test fast-forwards fixed delay loops.
+it queries the version through the stock UART handlers and supplies a 440 Hz
+tone to successive 64-sample DMA buffers. The stock DSPs produce stereo output
+with effects off and go quiet after an output-level command. The test models
+DMA completion and interrupt delivery, including the stock PendSV audio work.
+The flash and codec model uses virtual state, and the test fast-forwards fixed
+delay loops.
 
 For an OpenGP5 GP-5 baseline, build passthrough and relink the control ELF
 without EX9 relaxation for the Andes simulator. Run from the repository root.
