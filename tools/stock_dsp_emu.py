@@ -56,20 +56,25 @@ def uart_frame(payload):
 
 def catalog_replies(path):
     model, section = stock_section(path)
-    if model != "GP-50":
-        raise ValueError("expected GP-50 stock firmware for catalog replay")
     factory_data = stock_factory_data(path, model)
+    queries = ((0x2002, range(41 if model == "GP-50" else 40)), (0x7002, range(80)))
+    if model == "GP-5":
+        queries += ((0x7005, range(72, 80)),)
     replies = {}
-    for opcode, count in ((0x2002, 41), (0x7002, 80)):
-        for slot in range(count):
+    for opcode, slots in queries:
+        for slot in slots:
             query = struct.pack("<HHI", opcode, 8, slot)
             report = trace(model, section, factory_data, uart_frame(query))
             replies.setdefault((0x6000, 0), bytes.fromhex(report["version_reply"]))
             reply = bytes.fromhex(report["uart_reply"])
             size = int.from_bytes(reply[1:3], "little")
             if (not 12 <= size <= len(reply) or reply[0] != crc8(reply[4:size]) or
-                    reply[3] != 1 or reply[4:6] != query[:2] or reply[8:10] != query[4:6]):
+                    reply[3] != 1 or reply[4:6] != query[:2]):
                 raise ValueError(f"invalid catalog reply for {opcode:#x} slot {slot}: {reply.hex(' ')}")
+            if opcode == 0x7005 and reply[size:] != b"\x01\x04\x00\x14":
+                raise ValueError(f"missing SnapTone metadata acknowledgment for slot {slot}")
+            if opcode != 0x7005 and reply[8:10] != query[4:6]:
+                raise ValueError(f"unexpected slot in {opcode:#x} catalog reply for slot {slot}")
             replies[opcode, slot] = reply
     return replies
 

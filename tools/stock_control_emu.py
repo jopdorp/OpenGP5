@@ -32,6 +32,20 @@ STOCK_RADIO = {
     "GP-5": (0x4bc6c, 0x6139c, 0x85ad8, 0x5ff28),
     "GP-50": (0x4b63c, 0x5d40e, 0x81c80, 0x5c0a4),
 }
+StockCold = namedtuple("StockCold", "ipc frame iret tick idle yield_at bluetooth delay run tx rx rx_caller "
+                       "version_at version catalog panel_window spi panel_done rows gpio_a gpio_b ir_count writes")
+STOCK_COLD = {
+    "GP-5": StockCold(ipc=0x11b5c, frame=0x11eac, iret=0x11ed4, tick=0x5fb78, idle=0x5fe2c, yield_at=0x5f000,
+                      bluetooth=0x58608, delay=0x5fd78, run=0x23b08, tx=0x48814, rx=0x629ea, rx_caller=0x146d0,
+                      version_at=0x46dcc, version=0x01010006, catalog=(0x47000, 0x47020, 0x47060),
+                      panel_window=0x481c4, spi=0x66a36, panel_done=0x418d4, rows=80, gpio_a=0x20000, gpio_b=0x4c,
+                      ir_count=40, writes=((0x1000, 16), (0x1001, 12), (0x6003, 8), (0, 368), (0x6003, 8))),
+    "GP-50": StockCold(ipc=0x11b5a, frame=0x11e6c, iret=0x11e94, tick=0x5bdb6, idle=0x5bf9c, yield_at=0x5b4b8,
+                       bluetooth=0x55dbc, delay=0x5bf60, run=0x27914, tx=0x48712, rx=0x5ea5c, rx_caller=0x14a62,
+                       version_at=0x4604c, version=0x01010005, catalog=(0x46212, 0x46238),
+                       panel_window=0x47d74, spi=0x62a0a, panel_done=0x2792c, rows=128, gpio_a=0x8000, gpio_b=0x10,
+                       ir_count=41, writes=((0x1000, 17), (0x1001, 12), (0, 368))),
+}
 
 
 def command(andes, tool, *args):
@@ -169,11 +183,40 @@ end
     return commands
 
 
-def gp50_stock_cold(wire, requests):
+def stock_cold(model, wire, requests):
     # Deliver stock FreeRTOS switches and ticks explicitly because Andes sim
     # lacks the interrupt controller and IRET. Defer the packed Bluetooth task
     # after calibration so its alignment faults do not prevent the LCD check.
-    return [f"restore {wire} binary 0x90000000", r"""
+    cold = STOCK_COLD[model]
+    gp50 = model == "GP-50"
+    catalog_count = cold.ir_count + 80 + (0 if gp50 else 8)
+    stop = 0x27960 if gp50 else cold.panel_done
+    catalog_breaks = "\n".join(f"break *{address:#x}" for address in cold.catalog)
+    catalog_events = " || ".join(f"$event == {address:#x}" for address in cold.catalog)
+    # GP-50 waits for a Run event and renders its full first UI frame before
+    # the final checkpoint. GP-5 starts its application task automatically.
+    run_setup = "break *0x4ab3e" if gp50 else ""
+    run_event = "if $event == 0x4ab3e\n    set {unsigned short}$r0 = 0x0201\n  end" if gp50 else ""
+    ui_setup = "tbreak *0x27960\nbreak *0x405b8" if gp50 else ""
+    ui_event = r"""
+  if $event == 0x405b8
+    if *(unsigned short *)$r1 == 0 && *(unsigned short *)($r1 + 4) == 159 && *(unsigned short *)($r1 + 6) == $ui_bottom
+      set $ui_bottom = (int)*(unsigned short *)($r1 + 2) - 1
+    end
+  end""" if gp50 else ""
+    user_slots = """
+      if $cmd == 0x7005 && $slot >= 72 && $slot < 80
+        set $record = $slot + 49
+      end""" if not gp50 else ""
+    # The GP-5 sends a data reply followed by a four-byte ACK for 0x7005.
+    user_ack = """
+      if $cmd == 0x7005
+        set $pending = $pending + 4
+      end""" if not gp50 else ""
+    app_check = check("app", "0x27960 && $ui_bottom == -1 && $ui_bytes == 40960") if gp50 else ""
+    panel_check = check("panel", f"{cold.panel_done:#x} && $catalog == {catalog_count} && "
+                                f"$acks == {len(cold.writes)} && $lcd == 2 && $windows == {cold.rows}")
+    return [f"restore {wire} binary 0x90000000", rf"""
 define switch_stock_task
   set $resume = $pc
   set $saved_r0 = $r0
@@ -183,7 +226,7 @@ define switch_stock_task
   set $psw = $r0
   set $r0 = $resume
   set $r1 = $psw
-  set $pc = 0x11b5a
+  set $pc = {cold.ipc:#x}
   si 2
   set $r0 = ($psw & ~1) + 2
   set $pc = 0x11ab2
@@ -191,11 +234,11 @@ define switch_stock_task
   set $r0 = $saved_r0
   set $r1 = $saved_r1
   set $pc = 0x10038
-  tbreak *0x11e6c
+  tbreak *{cold.frame:#x}
   continue
   set $task_pc = $r1
   set $task_psw = $r2
-  tbreak *0x11e94
+  tbreak *{cold.iret:#x}
   continue
   set $task_r0 = $r0
   set $r0 = $task_psw
@@ -215,14 +258,14 @@ define tick_stock_idle
   set $tick_r15 = $r15
   set $woken = 0
   while !$woken && $ticks < 950
-    set $pc = 0x5bdb6
+    set $pc = {cold.tick:#x}
     set $lp = 0x100f0
     tbreak *0x100f0
     continue
     set $woken = $r0
     set $ticks = $ticks + 1
   end
-  set $pc = 0x5bf9c
+  set $pc = {cold.idle:#x}
   set $lp = $tick_lp
   set $r0 = $tick_r0
   set $r1 = $tick_r1
@@ -242,52 +285,48 @@ set $windows = 0
 set $lcd = 0
 set $ui_bottom = 127
 set $ui_bytes = 0
-set {unsigned int}0x40010000 = 0x8000
-set {unsigned int}0x40010030 = 0x10
-set {unsigned int}0x40003014 = 0x4000
-break *0x5b4b8
+set {{unsigned int}}0x40010000 = {cold.gpio_a:#x}
+set {{unsigned int}}0x40010030 = {cold.gpio_b:#x}
+set {{unsigned int}}0x40003014 = 0x4000
+break *{cold.yield_at:#x}
 set $yield_bp = $bpnum
-break *0x5bf9c
-break *0x4ab3e
-tbreak *0x27914
-break *0x48712 if $r1 >= 12 && $r0 != 0
-break *0x5ea5c if $lp == 0x14a62 && $pending
-tbreak *0x4604c
-break *0x46212
-break *0x46238
+break *{cold.idle:#x}
+{run_setup}
+tbreak *{cold.run:#x}
+break *{cold.tx:#x} if $r1 >= 12 && $r0 != 0
+break *{cold.rx:#x} if $lp == {cold.rx_caller:#x} && $pending
+tbreak *{cold.version_at:#x}
+{catalog_breaks}
 break *0x11050 if ($r7 & 3) != 0
-break *0x47d74
-break *0x62a0a
-tbreak *0x2792c
-tbreak *0x27960
-break *0x405b8
+break *{cold.panel_window:#x}
+break *{cold.spi:#x}
+tbreak *{cold.panel_done:#x}
+{ui_setup}
 continue
-while $pc != 0x27960 && $ticks < 950 && $switches < 9000
+while $ticks < 950 && $switches < 9000
   set $event = (unsigned int)$pc
-  if $event == 0x5b4b8 || $event == 0x5bf9c
-    if $event == 0x5bf9c
+  if $event == {cold.yield_at:#x} || $event == {cold.idle:#x}
+    if $event == {cold.idle:#x}
       tick_stock_idle
     end
     switch_stock_task
     set $switches = $switches + 1
-    if $pc == 0x55dbc
+    if $pc == {cold.bluetooth:#x}
       set $lp = $pc
       set $r0 = 1000
-      set $pc = 0x5bf60
+      set $pc = {cold.delay:#x}
     end
-    if $pc == 0x5b4b8
+    if $pc == {cold.yield_at:#x}
       disable $yield_bp
       si
       enable $yield_bp
     end
   end
-  if $event == 0x4ab3e
-    set {unsigned short}$r0 = 0x0201
+  {run_event}
+  if $event == {cold.run:#x}
+    {check("run", hex(cold.run))}
   end
-  if $event == 0x27914
-    """ + check("run", "0x27914") + r"""
-  end
-  if $event == 0x48712
+  if $event == {cold.tx:#x}
     set $frame = *(unsigned int *)($r0 + 4)
     set $cmd = *(unsigned short *)($frame + 4)
     set $size = *(unsigned short *)($frame + 6)
@@ -301,42 +340,42 @@ while $pc != 0x27960 && $ticks < 950 && $switches < 9000
       if $cmd == 0x6000 && $slot == 0
         set $record = 0
       end
-      if $cmd == 0x2002 && $slot < 41
+      if $cmd == 0x2002 && $slot < {cold.ir_count}
         set $record = $slot + 1
       end
       if $cmd == 0x7002 && $slot < 80
-        set $record = $slot + 42
-      end
+        set $record = $slot + {cold.ir_count + 1}
+      end{user_slots}
     end
     if *(unsigned char *)($frame + 3) == 0
 """ + "\n".join(
         f"      if $cmd == {opcode:#x} && $size == {length} && $acks == {index}\n"
         f"        dump binary memory {requests[index]} $frame ($frame + $r1)\n"
-        f"        set $record = 122\n        set $acks = $acks + 1\n      end"
-        for index, (opcode, length) in enumerate(((0x1000, 17), (0x1001, 12), (0, 368)))
-    ) + r"""
+        f"        set $record = {catalog_count + 1}\n        set $acks = $acks + 1\n      end"
+        for index, (opcode, length) in enumerate(cold.writes)
+    ) + rf"""
     end
     if $record >= 0
       set $reply = 0x90000000 + $record * 0x100
-      set $pending = *(unsigned char *)($reply + 1) | (*(unsigned char *)($reply + 2) << 8)
+      set $pending = *(unsigned char *)($reply + 1) | (*(unsigned char *)($reply + 2) << 8){user_ack}
     end
   end
-  if $event == 0x5ea5c
+  if $event == {cold.rx:#x}
     set $buffer = *(unsigned int *)($r3 + 0x18)
     set $capacity = *(unsigned short *)($r3 + 4)
     set $write = *(unsigned short *)($r3 + 8)
     set $i = 0
     while $i < $pending
-      set {unsigned char}($buffer + (($write + $i) % $capacity)) = *(unsigned char *)($reply + $i)
+      set {{unsigned char}}($buffer + (($write + $i) % $capacity)) = *(unsigned char *)($reply + $i)
       set $i = $i + 1
     end
-    set {unsigned short}($r3 + 8) = ($write + $pending) % $capacity
+    set {{unsigned short}}($r3 + 8) = ($write + $pending) % $capacity
     set $pending = 0
   end
-  if $event == 0x4604c
-    """ + check("version", "0x4604c && *(unsigned int *)($r0 + 4) == 0x01010005") + r"""
+  if $event == {cold.version_at:#x}
+    {check("version", f"{cold.version_at:#x} && *(unsigned int *)($r0 + 4) == {cold.version:#x}")}
   end
-  if $event == 0x46212 || $event == 0x46238
+  if {catalog_events}
     set $catalog = $catalog + 1
   end
   if $event == 0x1104e || $event == 0x1105e
@@ -345,16 +384,16 @@ while $pc != 0x27960 && $ticks < 950 && $switches < 9000
   if $event == 0x11050
     set $i = 0
     while $i < 4
-      set {unsigned char}($r7 + $i) = $r0 >> ($i * 8)
+      set {{unsigned char}}($r7 + $i) = $r0 >> ($i * 8)
       set $i = $i + 1
     end
     set $r7 = $r7 + 4
     set $pc = 0x11052
   end
-  if $event == 0x47d74 && $r0 == 0 && $r1 == 159 && $r2 == $windows && $r3 == $windows + 1
+  if $event == {cold.panel_window:#x} && $r0 == 0 && $r1 == 159 && $r2 == $windows && $r3 == $windows + 1
     set $windows = $windows + 1
   end
-  if $event == 0x62a0a
+  if $event == {cold.spi:#x}
     if $r1 == 320
       set $rows = $rows + 1
     end
@@ -365,22 +404,21 @@ while $pc != 0x27960 && $ticks < 950 && $switches < 9000
       if *(unsigned char *)$r0 == 0x11 && $lcd == 0
         set $lcd = 1
       end
-      if *(unsigned char *)$r0 == 0x29 && $lcd == 1 && $rows == 128
+      if *(unsigned char *)$r0 == 0x29 && $lcd == 1 && $rows == {cold.rows}
         set $lcd = 2
       end
     end
   end
-  if $event == 0x2792c
-    """ + check("panel", "0x2792c && $catalog == 121 && $acks == 3 && $lcd == 2 && $windows == 128") + r"""
+  if $event == {cold.panel_done:#x}
+    {panel_check}
   end
-  if $event == 0x405b8
-    if *(unsigned short *)$r1 == 0 && *(unsigned short *)($r1 + 4) == 159 && *(unsigned short *)($r1 + 6) == $ui_bottom
-      set $ui_bottom = (int)*(unsigned short *)($r1 + 2) - 1
-    end
+  {ui_event}
+  if $event == {stop:#x}
+    loop_break
   end
   continue
 end
-""" + check("app", "0x27960 && $ui_bottom == -1 && $ui_bytes == 40960")]
+{app_check}"""]
 
 
 def stock(andes, image, warm_handoff=False, radio=False, cold=False):
@@ -390,8 +428,6 @@ def stock(andes, image, warm_handoff=False, radio=False, cold=False):
         raise ValueError(f"unrecognized {model} stock control section")
     if warm_handoff and model != "GP-50":
         raise ValueError("warm handoff replay requires the GP-50 stock image")
-    if cold and model != "GP-50":
-        raise ValueError("stock cold replay requires the GP-50 stock image")
     with TemporaryDirectory() as directory:
         stub = Path(directory)
         (stub / "app.bin").write_bytes(app)
@@ -434,7 +470,7 @@ def stock(andes, image, warm_handoff=False, radio=False, cold=False):
         if radio or cold:
             _, presets = htfw.read_section(image, 0x65)
             flash = stub / "flash.bin"
-            flash_base = 0x166000 if cold else 0x190000
+            flash_base = (0x166000 if model == "GP-50" else 0x13f000) if cold else 0x190000
             flash.write_bytes(b"\xff" * (0x190000 - flash_base) + presets.ljust(0x70000, b"\xff"))
             sim += " --memory-region 0x80000000,0x10000"
             commands.extend(stock_radio(model, flash, flash_base))
@@ -446,10 +482,12 @@ def stock(andes, image, warm_handoff=False, radio=False, cold=False):
             wire = stub / "wire.bin"
             ack = b"\x01\x04\x00\x14"
             wire.write_bytes(b"".join(reply.ljust(0x100, b"\0") for reply in replies.values()) + ack)
-            requests = [stub / f"uart-{index}.bin" for index in range(3)]
+            requests = [stub / f"uart-{index}.bin" for index in range(len(STOCK_COLD[model].writes))]
             sim += " --memory-region 0x90000000,0x10000"
-            commands.extend(gp50_stock_cold(wire, requests))
-            expected.extend(["run", "version", "panel", "app"])
+            commands.extend(stock_cold(model, wire, requests))
+            expected.extend(["run", "version", "panel"])
+            if model == "GP-50":
+                expected.append("app")
         if warm_handoff:
             commands.extend(gp50_warm_handoff())
             expected.extend(["ack", "delayone", "delaytwo", "handoff"])
@@ -457,7 +495,7 @@ def stock(andes, image, warm_handoff=False, radio=False, cold=False):
         if cold:
             if replay_uart(image, [path.read_bytes() for path in requests]) != [ack] * len(requests):
                 raise ValueError("the stock DSP did not acknowledge the captured startup commands")
-            print("Stock DSP accepted the three captured startup writes")
+            print(f"Stock DSP accepted {len(requests)} captured startup writes")
 
 
 def open_elf_tlb(andes, elf, gp50=False):
@@ -565,7 +603,7 @@ def main():
     stock_mode.add_argument("--stock-radio", action="store_true",
                             help="continue stock startup through modeled settings flash and Bluetooth radio setup")
     stock_mode.add_argument("--stock-cold", action="store_true",
-                            help="run GP-50 stock startup through the LCD using stock DSP UART replies")
+                            help="run stock startup through the LCD using stock DSP UART replies")
     args = parser.parse_args()
     if args.gp50_warm_handoff and not args.stock:
         parser.error("--gp50-warm-handoff requires --stock")
