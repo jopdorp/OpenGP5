@@ -154,6 +154,8 @@ peripherals, plus the link between the two CPUs.
 
 ## OpenGP5 GP-50 bring-up
 
+See [LiveWDF on GP-50](gp50-livewdf.md) for the separate model pack build.
+
 The GP-50 build produces a control ELF and a raw DSP section for the emulators.
 The control test executes startup through LCD initialization and checks the
 command stream, display windows, backlight and control GPIO. The DSP test runs
