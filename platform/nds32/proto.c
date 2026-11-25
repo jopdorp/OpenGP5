@@ -97,7 +97,6 @@ static int frame_done(void)
 {
     uint8_t body[4 + PROTO_REQ_MAX];
     unsigned i, n = nnib / 2, len;
-    static const uint8_t ack[3] = { 0x14, 0x08, 0x00 };
 
     if ((nnib & 1) || n < 4) { proto_bad++; return PROTO_NONE; }
     for (i = 0; i < n; i++) body[i] = (uint8_t)((nib[2 * i] << 4) | nib[2 * i + 1]);
@@ -110,10 +109,13 @@ static int frame_done(void)
     }
     proto_frames++;
 
+#ifndef GP50_BOARD
     if (body[1] == 0x01 && len == 2 && body[4] == 0x11 && body[5] == 0x6F) {
+        static const uint8_t ack[3] = { 0x14, 0x08, 0x00 };
         proto_reply(0x01, 0, ack, 3);
         return PROTO_TO_LOADER;
     }
+#endif
     if (body[1] == 0x01 && len >= 2 && len <= sizeof proto_req && body[4] == 0x7E) {
         for (i = 0; i < len; i++) proto_req[i] = body[4 + i];
         proto_req_len = len;
@@ -145,6 +147,7 @@ int proto_feed(const uint8_t *ev)
     return r;
 }
 
+#ifndef GP50_BOARD
 void loader_handover(void)
 {
     uint32_t flags, a;
@@ -173,3 +176,4 @@ void loader_handover(void)
     ((void (*)(void))0)();
     for (;;) ;
 }
+#endif

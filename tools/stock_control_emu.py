@@ -136,13 +136,19 @@ def stock(andes, image, warm_handoff=False):
         checkpoints(andes, stub / "app.elf", commands, expected)
 
 
-def open_app(andes, elf):
+def open_elf_tlb(andes, elf, gp50=False):
     disassembly = command(andes, "objdump", "-d", elf)
     cache = disassembly.partition("<gp5_cache_on>:\n")[2].partition("\n\n")[0]
     match = re.search(r"^\s*([a-f0-9]+):[^\n]*\btlbop\b[^\n]*targetwrite", cache, re.M)
     if not match or "ex9.it" in disassembly:
         raise ValueError("expected an OpenGP5 app.elf linked without EX9 relaxation")
-    tlb = int(match[1], 16)
+    if gp50 and "<gp50_controls_init>:" not in disassembly:
+        raise ValueError("expected the GP-50 emulator app.elf")
+    return int(match[1], 16)
+
+
+def open_app(andes, elf):
+    tlb = open_elf_tlb(andes, elf)
     print("OpenGP5 control app, emulator build")
     checkpoints(andes, elf, [
         f"tbreak *{tlb:#x}", "run", check("tlb", hex(tlb)), tlb_fixture(tlb),
@@ -150,11 +156,84 @@ def open_app(andes, elf):
     ], ["tlb", "main"])
 
 
+def gp50_app(andes, elf):
+    tlb = open_elf_tlb(andes, elf, gp50=True)
+    # The simulator needs oscillator/eFuse/PLL readiness from the board.
+    # SPI is intercepted so the display sees transfers without a modeled FIFO.
+    script = rf"""set pagination off
+{SIM}
+load
+tbreak *{tlb:#x}
+run
+{tlb_fixture(tlb)}
+set {{unsigned int}} 0x40023010 = 2
+set {{unsigned int}} 0x40021078 = 1
+set {{unsigned int}} 0x40026034 = 1
+set {{unsigned int}} 0x40032034 = 1
+set {{unsigned int}} 0x40010000 = 0x8000
+set {{unsigned int}} 0x40010030 = 0x10
+break *delay_ms
+commands
+  silent
+  printf "DELAY %u\n", $r0
+  set $pc = $lp
+  continue
+end
+break *gp5_spim_send
+commands
+  silent
+  printf "SPI %u %u", (*(unsigned int *)0x40010004 >> 7) & 1, $r1
+  if $r1 <= 16
+    set $i = 0
+    while $i < $r1
+      printf " %02x", *(unsigned char *)($r0 + $i)
+      set $i = $i + 1
+    end
+  end
+  printf "\n"
+  set $pc = $lp
+  continue
+end
+break *usb_midi_init
+continue
+set $a_outputs = *(unsigned int *)0x40010018 & 0x11030080
+set $b_outputs = *(unsigned int *)0x40010048 & 0x60
+set $backlight = (*(unsigned int *)0x400100f4 & 0xf) == 0xa && *(unsigned int *)0x4002f024 == 3999
+printf "BOARD %d\n", $pc == (unsigned int)&usb_midi_init && gp5_stage == 8 && $a_outputs == 0x11030080 && $b_outputs == 0x60 && $backlight && gp50_control_input == 0xffff
+"""
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "startup.gdb"
+        path.write_text(script)
+        trace = command(andes, "gdb", "-nx", "-batch", elf, "-x", path).splitlines()
+
+    # Command/data-select, byte count and data, with each pixel row sent as a burst.
+    spi = [line[4:] for line in trace if line.startswith("SPI ")]
+    init = (
+        "0 1 11", "0 1 b1", "1 3 05 3a 3a", "0 1 b2", "1 3 05 3a 3a",
+        "0 1 b3", "1 6 05 3a 3a 05 3a 3a", "0 1 b4", "1 1 03",
+        "0 1 c0", "1 3 62 02 04", "0 1 c1", "1 1 c0", "0 1 c2", "1 2 0d 00",
+        "0 1 c3", "1 2 8d 6a", "0 1 c4", "1 2 8d ee", "0 1 c5", "1 1 12",
+        "0 1 e0", "1 16 03 1b 12 11 3f 3a 32 34 2f 2b 30 3a 00 01 02 05",
+        "0 1 e1", "1 16 03 1b 12 11 32 2f 2a 2f 2e 2c 35 3f 00 00 01 05",
+        "0 1 36", "1 1 68", "0 1 3a", "1 1 55", "0 1 2c",
+    )
+    column = ["0 1 2a", "1 4 00 00 00 9f", "0 1 2b"]
+    expected = [*init, *column, "1 4 00 00 00 7f", "0 1 2c", *(["1 320"] * 128),
+                "0 1 29", *column, "1 4 00 18 00 67", "0 1 2c", *(["1 320"] * 80)]
+    if spi != expected:
+        raise ValueError("unexpected panel initialization or pixel window")
+    delays = [int(line.split()[1]) for line in trace if line.startswith("DELAY ")]
+    if "BOARD 1" not in trace or delays[:6] != [1, 1, 130, 120, 10, 100]:
+        raise ValueError("unexpected board registers or panel reset timings")
+    print("GP-50 reached USB initialization with the 160×128 panel, startup logo and backlight")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--stock", type=Path, help="official Valeton update ZIP or BIN")
     source.add_argument("--open-elf", type=Path, help="OpenGP5 app.elf linked without EX9 relaxation")
+    source.add_argument("--gp50-app", type=Path, help="GP-50 app.elf from the emulator build")
     parser.add_argument("--andes-bin", type=Path, default=ANDES)
     parser.add_argument("--gp50-warm-handoff", action="store_true",
                         help="replay the stock GP-50 update-mode request up to the factory-loader jump")
@@ -164,6 +243,8 @@ def main():
     try:
         if args.stock:
             stock(args.andes_bin, args.stock, args.gp50_warm_handoff)
+        elif args.gp50_app:
+            gp50_app(args.andes_bin, args.gp50_app)
         else:
             open_app(args.andes_bin, args.open_elf)
     except (OSError, ValueError, subprocess.SubprocessError, zipfile.BadZipFile) as exc:

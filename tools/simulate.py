@@ -24,6 +24,7 @@ No pedal needed (docs/platform/simulator.md).
   --files DIR     the firmware's files (gp5_file): every file in DIR, by its name
   --check         build with the address and undefined-behaviour checkers: a crash or a bad memory access stops
                   with the line it happened on (slower)
+  --gp50          160 x 128 screen and extra inputs, e.g. "left turn 2", "save click", "fs2 down"
 The log (gp5_log on either processor) and the LEDs print as the run goes. The timing is the pedal's: 64-sample
 blocks, fw_tick every 10 ms, the PARA hold at 0.6 s, the audio link's words three blocks on. The arithmetic is the
 pedal's maths code compiled for the computer; cycle counts are not simulated (gp5_link.py status on the pedal).
@@ -36,6 +37,9 @@ sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "platform"))
 import manifest                                         # noqa: E402
 from run_effect import read_wav, tone                   # noqa: E402
+
+GP50_ENCODERS = ("left", "middle", "right")
+GP50_BUTTONS = ("drum", "exit", "global", "save", "fs2")
 
 
 def firmware_dir(name):
@@ -54,7 +58,7 @@ def param_names(fw):
     return names, choices, shown
 
 
-def events(script, names, choices, shown):
+def events(script, names, choices, shown, gp50=False):
     """the script's lines -> (ms, event) pairs, sorted"""
     out = []
     for n, raw in enumerate(script.splitlines(), 1):
@@ -74,6 +78,18 @@ def events(script, names, choices, shown):
             elif w[1] in ("down", "up"): out.append((t, f"para_{w[1]}"))
             elif w[1] == "turn" and len(w) == 3 and re.match(r"^[+-]?\d+$", w[2]): out.append((t, f"turn {int(w[2])}"))
             else: bad("para click | hold | down | up | turn N")
+        elif gp50 and w and w[0] in GP50_ENCODERS:
+            if len(w) != 3 or w[1] != "turn" or not re.fullmatch(r"[+-]?\d+", w[2]):
+                bad(f"{w[0]} turn N")
+            encoder = GP50_ENCODERS.index(w[0])
+            out.append((t, f"encoder {encoder} {int(w[2])}"))
+        elif gp50 and w and w[0] in GP50_BUTTONS:
+            button = GP50_BUTTONS.index(w[0])
+            if len(w) == 2 and w[1] == "click":
+                out += [(t, f"button {button} 1"), (t + 100, f"button {button} 0")]
+            elif len(w) == 2 and w[1] in ("down", "up"):
+                out.append((t, f"button {button} {int(w[1] == 'down')}"))
+            else: bad(f"{w[0]} click | down | up")
         elif w[:1] == ["knob"] and len(w) == 2 and w[1].isdigit(): out.append((t, f"knob {int(w[1])}"))
         elif w[:1] == ["set"] and len(w) == 3:
             k, v = line[2].upper(), line[3]
@@ -94,9 +110,9 @@ def events(script, names, choices, shown):
     return sorted(out, key=lambda e: e[0])
 
 
-def build(fw, m, d, check=False):
+def build(fw, m, d, check=False, gp50=False):
     plat = ROOT / "platform"
-    flags = manifest.flags(m, fw)
+    flags = manifest.flags(m, fw) + (["-DGP50_BOARD=1"] if gp50 else [])
     lib, exe = d / "sim_dsp.so", d / "sim"
     cc = ["cc", "-std=gnu99", "-Wall", "-Wno-unused-function", "-Werror=implicit-function-declaration", "-fno-builtin", "-g", *flags,
           *(["-fsanitize=address,undefined", "-fno-sanitize=shift-base", "-fno-omit-frame-pointer"] if check else [])]
@@ -119,6 +135,7 @@ def main():
     ap.add_argument("--out"); ap.add_argument("--script"); ap.add_argument("--seconds", type=float)
     ap.add_argument("--shots"); ap.add_argument("--knob", type=int, default=255)
     ap.add_argument("--store"); ap.add_argument("--files")
+    ap.add_argument("--gp50", action="store_true", help="simulate the GP-50 screen size and inputs")
     ap.add_argument("--check", action="store_true", help="build with the address and undefined-behaviour checkers")
     a = ap.parse_args()
     fw = firmware_dir(a.firmware).resolve()
@@ -127,7 +144,8 @@ def main():
     if not m: sys.exit(f"{fw}: no firmware.json (the simulator runs OpenGP5 1.0 firmwares)")
     rate = m["audio"]["sample_rate"]
     names, choices, shown = param_names(fw)
-    ev = [(0, f"knob {max(0, min(255, a.knob))}")] + events(pathlib.Path(a.script).read_text() if a.script else "", names, choices, shown)
+    script = pathlib.Path(a.script).read_text() if a.script else ""
+    ev = [(0, f"knob {max(0, min(255, a.knob))}")] + events(script, names, choices, shown, a.gp50)
     samples = read_wav(a.inp) if a.inp else tone()
     seconds = a.seconds or (len(samples) / rate)
     out = pathlib.Path(a.out or ROOT / "build/sim" / f"{m['id']}.wav")
@@ -136,7 +154,7 @@ def main():
     for old in shots.glob("*.p[np][gm]"): old.unlink()
     with tempfile.TemporaryDirectory() as d:
         d = pathlib.Path(d)
-        lib, exe = build(fw, m, d, a.check)
+        lib, exe = build(fw, m, d, a.check, a.gp50)
         (d / "events.txt").write_text("".join(f"{t} {e}\n" for t, e in ev))
         (d / "in.raw").write_bytes(samples.tobytes())
         env = dict(os.environ, ASAN_OPTIONS=os.environ.get("ASAN_OPTIONS", "abort_on_error=0"))   # (--check: report, no crash report)
@@ -155,7 +173,9 @@ def main():
     try:
         from PIL import Image
         for p in sorted(shots.glob("*.ppm")):
-            Image.open(p).resize((640, 320), Image.NEAREST).save(p.with_suffix(".png")); p.unlink()
+            with Image.open(p) as screen:
+                screen.resize((screen.width * 4, screen.height * 4), Image.NEAREST).save(p.with_suffix(".png"))
+            p.unlink()
         kind = "png"
     except ImportError:
         kind = "ppm (pip install pillow for PNG)"

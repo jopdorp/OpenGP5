@@ -52,5 +52,12 @@ with tempfile.TemporaryDirectory() as d:
     check(r.returncode == 0 and store.exists(), "the store is kept between runs")
     run(d, "restart", "0.5 shot after\n", "--store", str(store))
     check((d / "restart/after.png").exists() or (d / "restart/after.ppm").exists(), "a restart with the store")
+    knob_script = "0.2 left turn 2\n0.4 middle turn 3\n0.6 right turn 1\n0.8 fs2 click\n"
+    param_script = "0.2 set Rate 520\n0.4 set Depth 65\n0.6 set Shape Triangle\n0.8 set Shape Square\n"
+    controls = run(d, "gp50-controls", knob_script, "--gp50")
+    parameters = run(d, "gp50-parameters", param_script, "--gp50")
+    check(controls.returncode == parameters.returncode == 0 and
+          (d / "gp50-controls.wav").read_bytes() == (d / "gp50-parameters.wav").read_bytes(),
+          "GP-50 encoders and FS2 reach the DSP parameters")
 print("ALL OK" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

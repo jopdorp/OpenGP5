@@ -41,7 +41,12 @@
 #define LOGW ((volatile uint32_t *)0x20007000u)
 #define LOG_MAX 480u
 #define MAGIC 0x21355047u
-#define UART0 0x40005000u
+#ifdef GP50_BOARD
+#define UART_DSP 0x40006000u
+#include "gp50_audio.h"
+#else
+#define UART_DSP 0x40005000u
+#endif
 #define UART_CLK 96000000u
 #define BAUD 460800u
 #define DSP_VERSION 0x01010006u /* "V106" */
@@ -111,8 +116,8 @@ static uint8_t txq[TXQ_N] __attribute__((section(".large")));
 static uint32_t txq_head, txq_tail;                  /* head: next to send; tail: next free; zero at start-up */
 
 static void uart_pump(void) {
-    while (txq_head != txq_tail && ((REG(UART0 + 0x0C) >> 11) & 0x1Fu) < 16u) {
-        REG(UART0 + 0x00) = txq[txq_head & (TXQ_N - 1u)];
+    while (txq_head != txq_tail && ((REG(UART_DSP + 0x0C) >> 11) & 0x1Fu) < 16u) {
+        REG(UART_DSP + 0x00) = txq[txq_head & (TXQ_N - 1u)];
         txq_head++;
     }
 }
@@ -321,10 +326,14 @@ void resp_main(void) {
     ST[26] = 0;
     ST[29] = 0; ST[30] = 0; ST[31] = 0;
 
-    REG(UART0 + 0x10) = (UART_CLK + BAUD * 8u) / (BAUD * 16u) - 1u;
-    REG(UART0 + 0x08) = 0x202Eu;
-    REG(UART0 + 0x04) = 0x703u;
-    REG(UART0 + 0x14) = 0x5000u;
+#ifdef GP50_BOARD
+    gp50_dsp_clock();
+    gp50_dsp_pins();
+#endif
+    REG(UART_DSP + 0x10) = (UART_CLK + BAUD * 8u) / (BAUD * 16u) - 1u;
+    REG(UART_DSP + 0x08) = 0x202Eu;
+    REG(UART_DSP + 0x04) = 0x703u;
+    REG(UART_DSP + 0x14) = 0x5000u;
 
     /* SysTick, polled (no TICKINT): COUNTFLAG every ~2.75M core cycles = 43 ms at 64 MHz,
      * 14 ms at 192 MHz (core clock under the resident is not pinned yet). */
@@ -334,10 +343,15 @@ void resp_main(void) {
     REG(0xE000E010u) = 5u;
 
 #ifdef AUDIO_PASSTHROUGH
+#ifdef GP50_BOARD
+    int codecs_ready = gp50_codecs_init();
+    if (codecs_ready) audio_init();
+#else
 #ifdef AUDIO_SPI1
     spi1_init();
 #endif
     audio_init();
+#endif
 #endif
     uint8_t *const buf = (uint8_t *)0x20006C00u;
     const uint32_t BUF_MAX = 512u;
@@ -345,13 +359,16 @@ void resp_main(void) {
     for (;;) {
         ST[1]++;
 #ifdef AUDIO_PASSTHROUGH
+#ifdef GP50_BOARD
+        if (codecs_ready)
+#endif
         audio_poll();
 #endif
         uart_pump();
         if (REG(0xE000E010u) & 0x10000u) send_report();
-        uint32_t n = (REG(UART0 + 0x0C) >> 4) & 0x1Fu;
+        uint32_t n = (REG(UART_DSP + 0x0C) >> 4) & 0x1Fu;
         while (n--) {
-            uint8_t b = (uint8_t)REG(UART0 + 0x00);
+            uint8_t b = (uint8_t)REG(UART_DSP + 0x00);
             if (have < BUF_MAX) buf[have++] = b;
         }
         while (have >= 4u) {

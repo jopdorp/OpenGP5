@@ -59,7 +59,9 @@ const gp5_irq_fn gp5_irq_table[GP5_IRQ_COUNT] = {
     [0 ... GP5_IRQ_COUNT - 1] = stray,
     [GP5_IRQ_TICK] = H(SystickInterrupt),
     [GP5_IRQ_UART0] = H(UART0_Interrupt),
+#ifndef GP50_BOARD
     [GP5_IRQ_TIMER2] = H(Timer2Interrupt),
+#endif
     [13] = H(gp5_link_irq),
 };
 

@@ -130,3 +130,30 @@ The relinked OpenGP5 control app reaches `main`. The existing DSP check
 verifies the UART reply and processed audio blocks. A full board emulator
 still needs the flash, interrupt timing, panel, control shift I/O and audio
 peripherals, plus the link between the two CPUs.
+
+## OpenGP5 GP-50 bring-up
+
+The GP-50 build produces a control ELF and a raw DSP section for the emulators.
+The control test executes startup through LCD initialization and checks the
+command stream, display windows, backlight and control GPIO. The DSP test runs
+the codec setup, UART and 64-sample processing. It also checks that a codec
+NACK keeps audio off.
+
+```sh
+platform/build_firmware.sh --gp50-emu tremolo
+python3 tools/stock_control_emu.py --gp50-app build/GP-50_tremolo/control.elf
+python3 tools/dsp_emu_check.py build/GP-50_tremolo/audio.dsp --gp50-raw --set 0=520
+python3 tools/dsp_emu_check.py build/GP-50_tremolo/audio.dsp --gp50-raw --codec-nack
+```
+
+In the desktop simulator, left, middle and right turn RATE, DEPTH and SHAPE.
+FS1 toggles bypass and FS2 changes the shape. For example:
+
+```sh
+printf '0.2 left turn 2\n0.4 middle turn 3\n0.6 right turn 1\n0.8 fs2 click\n' > controls.txt
+python3 tools/simulate.py tremolo --gp50 --script controls.txt
+```
+
+The emulator build uses one cold-start control output pattern. The power-state
+transitions, analog input and output routing, MIDI and USB behavior, and the
+cold-start recovery path still need physical verification.

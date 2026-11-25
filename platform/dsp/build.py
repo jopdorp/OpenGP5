@@ -4,6 +4,7 @@ Build the from-scratch DSP "hello" firmware into an HTFW image.
 
   build.py <out_htfw> [--src hello.c|sniff.c]                  an image holding only section 0x63
   build.py <base_htfw> <out_htfw> [--src ...]                    base image with section 0x63 replaced
+  build.py <out_raw> --gp50-raw --src responder.c --firmware passthrough    GP-50 emulator section
 
 Section 0x63 (DSP region c = DSP flash 0x4000..0x10348) is:
   [0x400-byte header: ffffffff ffffffff "V106" 0x4400 + zeros; the DSP resident reads word 3 = where the
@@ -20,6 +21,7 @@ ROOT = HERE.parents[1]
 HTFW = ROOT / "tools" / "htfw.py"
 SEC = "section_00_type_0x63.bin"
 SEC_LEN = 0xC348
+GP50_SEC_LEN = 0xB874
 HDR_LEN = 0x400
 VTOR = 0x4400
 CFLAGS = ["-mcpu=cortex-m4", "-mthumb", "-mfloat-abi=hard", "-mfpu=fpv4-sp-d16", "-O2", "-ffreestanding",
@@ -35,10 +37,20 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument("stock", metavar="[BASE] OUT"); ap.add_argument("out", nargs="?")
     ap.add_argument("--src", default="hello.c", help="firmware source in this directory")
     ap.add_argument("-D", dest="defines", action="append", default=[], help="extra -D for the firmware")
+    ap.add_argument("--gp50-raw", action="store_true", help="build the GP-50 DSP section for emulation")
     ap.add_argument("--firmware", help="name under firmwares/ or a firmware folder: builds its dsp/firmware.h in (needs responder.c "
                                        "with -D AUDIO_PASSTHROUGH -D AUDIO_LEVEL)")
     a = ap.parse_args()
     base, out = (a.stock, a.out) if a.out else (None, a.stock)
+    defines = {d.split("=", 1)[0] for d in a.defines}
+    if "GP50_BOARD" in defines:
+        ap.error("select the GP-50 with --gp50-raw")
+    if a.gp50_raw:
+        if base or a.src != "responder.c" or not a.firmware:
+            ap.error("--gp50-raw requires --src responder.c and --firmware")
+        if defines & {"RESIDENT_TICK_PATCH", "AUDIO_SPI1"}:
+            ap.error("GP-50 builds use analog audio and no resident patch")
+        a.defines += ["GP50_BOARD", "AUDIO_PASSTHROUGH", "AUDIO_LEVEL"]
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
         elf = d / "hello.elf"
@@ -51,6 +63,8 @@ def main():
             sys.path.insert(0, str(HERE.parent)); import manifest
             m = manifest.load(inc.parent)                   # firmware.json: the settings come from it
             assert m, f"no {inc.parent}/firmware.json: OpenGP5 1.0 firmwares describe themselves there (docs/platform/api.md)"
+            if a.gp50_raw and (m["audio"]["sample_rate"] != 44100 or m["audio"]["link"]):
+                ap.error("--gp50-raw requires 44.1 kHz and analog audio")
             fw += manifest.flags(m, inc.parent) + [f"-I{inc.parent}"] + (["-DAUDIO_SPI1"] if m["audio"]["link"] else [])
         srcs = [str(HERE / a.src)] + ([str(HERE / "gp5_math.c")] if a.src == "responder.c" else [])
         subprocess.run([tool("arm-none-eabi-gcc"), *CFLAGS, f"-I{HERE}", *fw, *[f"-D{x}" for x in a.defines],
@@ -68,10 +82,13 @@ def main():
         sp, reset = struct.unpack_from("<2I", img, 0)
         assert 0x20000000 < sp <= 0x20008000 and reset & 1 and VTOR < reset < VTOR + len(img), (hex(sp), hex(reset))
 
-        header = b"\xff" * 8 + b"V106" + struct.pack("<I", VTOR) + bytes(HDR_LEN - 16)
-        assert HDR_LEN + len(img) <= SEC_LEN
-        new = header + img + b"\xff" * (SEC_LEN - HDR_LEN - len(img))
-        if base:
+        version, size = (b"V105", GP50_SEC_LEN) if a.gp50_raw else (b"V106", SEC_LEN)
+        header = b"\xff" * 8 + version + struct.pack("<I", VTOR) + bytes(HDR_LEN - 16)
+        assert HDR_LEN + len(img) <= size
+        new = header + img + b"\xff" * (size - HDR_LEN - len(img))
+        if a.gp50_raw:
+            blob = new
+        elif base:
             blob = gp5tool.combine(open(base, "rb").read(), {0x63: new})
         else:
             blob = gp5tool.make_image({0x63: new})

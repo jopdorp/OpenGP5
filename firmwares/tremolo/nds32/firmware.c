@@ -14,7 +14,8 @@
 
 static const uint8_t rows[] = { GP5_P_RATE, GP5_P_DEPTH, GP5_P_SHAPE, GP5_UI_PRESETS };
 static const int16_t steps[] = { 10, 5, 0, 0 };                  /* 0.1 Hz and 5 % a click */
-static gp5_ui_page_t page = { .rows = rows, .n = 4, .steps = steps, .font = &gp5_font_sans_16, .row_h = 20, .upper = 1 };
+static gp5_ui_page_t page = { .rows = rows, .n = 4, .steps = steps, .font = &gp5_font_sans_16,
+                              .row_h = GP5_SCREEN_H / 4, .upper = 1 };
 
 static void show_on(void)
 {
@@ -24,6 +25,24 @@ static void show_on(void)
 
 void fw_init(void) { show_on(); }
 void fw_foot_down(void) { gp5_param_set(GP5_P_ON, !gp5_param(GP5_P_ON)); show_on(); }
+#ifdef GP50_BOARD
+void fw_gp50_encoder_turn(unsigned encoder, int detents)
+{
+    if (encoder >= 3) return;
+    unsigned id = rows[encoder];
+    int64_t value = gp5_param(id) + (int64_t)detents * (steps[encoder] ? steps[encoder] : 1);
+    const gp5_param_desc_t *param = &gp5_param_table[id];
+    if (value < param->min) value = param->min;
+    if (value > param->max) value = param->max;
+    gp5_param_set(id, (int32_t)value);
+}
+
+void fw_gp50_button(unsigned button, int down)
+{
+    if (button == GP50_BUTTON_FS2 && down)
+        gp5_param_set(GP5_P_SHAPE, (gp5_param(GP5_P_SHAPE) + 1) % 3);
+}
+#endif
 void fw_param_changed(unsigned id) { if (id == GP5_P_ON) show_on(); }        /* from a computer */
 void fw_para_turn(int d) { gp5_ui_page_turn(&page, d); }
 void fw_para_click(void) { gp5_ui_page_click(&page); }

@@ -1,5 +1,22 @@
-#include <nds32_intrinsic.h>
 #include "flash.h"
+
+#ifdef GP50_BOARD
+/* The GP-50 storage layout and flash driver are unverified. */
+uint32_t gp5_flash_id(void) { return 0; }
+uint32_t gp5_flash_status(void) { return 0; }
+int gp5_flash_read_cmd(uint32_t addr, uint32_t *dst, unsigned len)
+{
+    (void)addr; (void)dst; (void)len;
+    return -1;
+}
+int gp5_flash_erase(uint32_t addr) { (void)addr; return -1; }
+int gp5_flash_program(uint32_t addr, const uint32_t *src, unsigned len)
+{
+    (void)addr; (void)src; (void)len;
+    return -1;
+}
+#else
+#include <nds32_intrinsic.h>
 
 /* No EX9 / IFC compaction in this file: an ex9.it instruction executes an entry of a table that lives in
  * flash, which must not be read while a flash command runs (build.sh compiles this file with
@@ -162,3 +179,4 @@ int gp5_flash_program(uint32_t addr, const uint32_t *src, unsigned len)
 }
 
 __asm__(".pushsection .ramfunc,\"ax\",@progbits\n\t.no_ifc_end\n\t.no_ex9_end\n\t.popsection");
+#endif

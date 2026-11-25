@@ -11,6 +11,18 @@
 #include "gp5_firmware.h"
 #include "hal/flash.h"
 
+#ifdef GP50_BOARD
+unsigned gp5_store_load(uint32_t id, void *dst, unsigned max)
+{
+    (void)id; (void)dst; (void)max;
+    return 0;
+}
+int gp5_store_save(uint32_t id, const void *src, unsigned len)
+{
+    (void)id; (void)src; (void)len;
+    return -1;
+}
+#else
 #define MAGIC 0x53355047u                           /* "GP5S" */
 #define HDR 16u
 #define SECT(i) ((uint32_t)(i) * GP5_FLASH_SECTOR)   /* offsets inside the store */
@@ -151,3 +163,4 @@ int gp5_store_save(uint32_t id, const void *src, unsigned len)
         return put(a, seq, id, (const uint8_t *)src, len);
     }
 }
+#endif
