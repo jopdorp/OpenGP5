@@ -351,8 +351,8 @@ int main(int argc, char **argv)
     }
     while (fw_draw(force)) force = 0;
     shot(argv[5], "end");
-    fprintf(stderr, "screen: at most %lu bytes sent in one fw_draw call while running (one main-loop pass; the whole screen is 25,600;"
-                    " the first full draw: %lu)\n", blit_most, blit_first);
+    fprintf(stderr, "screen: at most %lu bytes sent in one fw_draw call while running (one main-loop pass; the whole screen is %u;"
+                    " the first full draw: %lu)\n", blit_most, 2u * GP5_SCREEN_W * GP5_SCREEN_H, blit_first);
     if (strcmp(argv[7], "-")) store_file(argv[7], 1);
     fclose(fout);
     return 0;
