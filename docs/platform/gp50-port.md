@@ -175,3 +175,15 @@ DMA link between the processors and separate isochronous USB endpoints.
 The stock control firmware also contains Bluetooth A2DP audio and BLE/GATT
 command handling. The wireless and USB transports share the stock command
 dispatcher. Bluetooth audio and BLE editing are separate porting work.
+
+### Native assets and recovery
+
+The V1.0.5 stock control app has a SnapTone export handler. Its corresponding
+DSP read command, `0x7004`, returned without an asset in the stock UART
+replay. The IR and SnapTone metadata queries did return data.
+
+The stock DSP references asset metadata at flash offsets
+`0x114000..0x121fff`, a SnapTone bank at `0x122000..0x157fff`, and the
+shared user IR and SnapTone bank at `0x158000..0x1cffff`. A full backup
+requires hardware readout of both processors' flash. The GP-50 probe pinout
+and cold recovery procedure still need confirmation.
