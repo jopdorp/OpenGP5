@@ -5,9 +5,11 @@
 #include <jack/jack.h>
 #include <samplerate.h>
 
+#include <limits.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define FRAMES GP5_BLOCK
@@ -32,6 +34,11 @@ static struct {
 
 static atomic_bool running, audio_error;
 static struct {
+    int32_t *samples;
+    size_t count, position;
+    atomic_bool playing;
+} demo;
+static struct {
     enum sim_control control;
     int value;
 } events[CONTROL_EVENTS];
@@ -47,6 +54,16 @@ static atomic_uint screen_pending = 1;
 bool sim_live_running(void)
 {
     return atomic_load(&running);
+}
+
+bool sim_live_demo_available(void)
+{
+    return demo.count != 0;
+}
+
+bool sim_live_demo_playing(void)
+{
+    return atomic_load_explicit(&demo.playing, memory_order_relaxed);
 }
 
 void sim_live_control(enum sim_control control, int value)
@@ -79,7 +96,14 @@ static void apply_controls(void)
     unsigned write = atomic_load_explicit(&event_write, memory_order_acquire);
     while (read != write) {
         unsigned slot = read++ % CONTROL_EVENTS;
-        sim_control(events[slot].control, events[slot].value);
+        if (events[slot].control == SIM_DEMO) {
+            bool play = events[slot].value != 0;
+            if (!sim_live_demo_available() || play == sim_live_demo_playing()) continue;
+            demo.position = 0;
+            atomic_store_explicit(&demo.playing, play, memory_order_relaxed);
+        } else {
+            sim_control(events[slot].control, events[slot].value);
+        }
     }
     atomic_store_explicit(&event_read, read, memory_order_release);
 }
@@ -120,10 +144,62 @@ static int32_t q31(float sample)
     return (int32_t)(sample * Q31_SCALE);
 }
 
+static bool load_demo(const char *path, double ratio)
+{
+    if (!isfinite(ratio) || !src_is_valid_ratio(ratio)) return false;
+    FILE *file = fopen(path, "rb");
+    if (!file) return false;
+    long bytes = fseek(file, 0, SEEK_END) == 0 ? ftell(file) : -1;
+    if (bytes > 0 && bytes % sizeof *demo.samples == 0 && fseek(file, 0, SEEK_SET) == 0) {
+        demo.samples = malloc(bytes);
+        if (demo.samples && fread(demo.samples, 1, bytes, file) == (size_t)bytes)
+            demo.count = bytes / sizeof *demo.samples;
+    }
+    fclose(file);
+    if (!demo.count || ratio == 1.0) return demo.count != 0;
+
+    double frames = ceil(demo.count * ratio);
+    size_t limit = SIZE_MAX / sizeof(float);
+    if (limit > INT_MAX) limit = INT_MAX;
+    if (frames > limit || demo.count > limit) return false;
+    float *input = malloc(demo.count * sizeof *input);
+    float *output = malloc((size_t)frames * sizeof *output);
+    SRC_DATA data = {
+        .data_in = input, .input_frames = demo.count,
+        .data_out = output, .output_frames = (long)frames,
+        .src_ratio = ratio, .end_of_input = 1,
+    };
+    bool ok = false;
+    if (input && output) {
+        src_int_to_float_array(demo.samples, input, (int)demo.count);
+        if (!src_simple(&data, SRC_SINC_FASTEST, 1) && data.output_frames_gen > 0) {
+            int32_t *converted = realloc(demo.samples, (size_t)data.output_frames_gen * sizeof *converted);
+            if (converted) {
+                demo.samples = converted;
+                demo.count = data.output_frames_gen;
+                for (size_t i = 0; i < demo.count; i++) demo.samples[i] = q31(output[i]);
+                ok = true;
+            }
+        }
+    }
+    free(output);
+    free(input);
+    return ok;
+}
+
 static bool feed_firmware(const float *samples, unsigned frames)
 {
+    bool playing = sim_live_demo_playing();
     for (unsigned i = 0; i < frames; i++) {
-        audio.input[audio.input_used++] = q31(samples[i]);
+        if (playing) {
+            audio.input[audio.input_used++] = demo.samples[demo.position++];
+            if (demo.position == demo.count) {
+                playing = false;
+                atomic_store_explicit(&demo.playing, false, memory_order_relaxed);
+            }
+        } else {
+            audio.input[audio.input_used++] = q31(samples[i]);
+        }
         if (audio.input_used != FRAMES) continue;
         int32_t words[2 * FRAMES];
         float output[2 * FRAMES];
@@ -215,16 +291,22 @@ static void shutdown(void *unused)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s dsp.so title\n", argv[0]);
+    if (argc != 3 && argc != 5) {
+        fprintf(stderr, "usage: %s dsp.so title [demo.raw demo_rate]\n", argv[0]);
         return 2;
     }
     if (sim_open(argv[1])) return 1;
     audio.firmware_rate = sim_rate();
+    if (argc == 5 && !load_demo(argv[3], audio.firmware_rate / strtod(argv[4], NULL))) {
+        fprintf(stderr, "Could not load the demo sample\n");
+        free(demo.samples);
+        return 1;
+    }
     jack_status_t status;
     jack_client_t *client = jack_client_open("OpenGP5 GP-50", JackNoStartServer | JackUseExactName, &status);
     if (!client) {
         fprintf(stderr, "Could not open the JACK client (status 0x%x)\n", (unsigned)status);
+        free(demo.samples);
         return 1;
     }
 
@@ -271,5 +353,6 @@ close:
     jack_client_close(client);
     src_delete(audio.output_src);
     src_delete(audio.input_src);
+    free(demo.samples);
     return result;
 }

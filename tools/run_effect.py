@@ -19,18 +19,23 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 RATE = 44100
 
 
-def read_wav(path):
+def read_pcm_wav(path):
     with wave.open(str(path), "rb") as w:
         ch, width, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
         raw = w.readframes(n)
-    if width not in (2, 3): sys.exit("in.wav must be 16-bit or 24-bit PCM")
-    if rate != RATE: print(f"note: {path} is {rate} Hz; the pedal runs at {RATE} Hz (times will be off)", file=sys.stderr)
+    if width not in (2, 3): sys.exit(f"{path}: WAV must be 16-bit or 24-bit PCM")
     out = array.array("i")
     step = ch * width
     for i in range(0, len(raw), step):
         b = raw[i:i + width]
         v = int.from_bytes(b, "little", signed=True)
         out.append(v << (32 - 8 * width))
+    return out, rate
+
+
+def read_wav(path):
+    out, rate = read_pcm_wav(path)
+    if rate != RATE: print(f"note: {path} is {rate} Hz; the pedal runs at {RATE} Hz (times will be off)", file=sys.stderr)
     return out
 
 

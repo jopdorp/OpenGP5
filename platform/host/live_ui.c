@@ -10,6 +10,7 @@ enum { MOUSE = 1, KEY = 2 };
 
 static const uint32_t ink = 0xe8edf3, muted = 0xa0abb9, accent = 0x73d2c3;
 static const SDL_Rect lcd = { 24, 74, LCD_W * 3, LCD_H * 3 };
+static const SDL_Rect demo = { 715, 416, 172, 42 };
 static const struct {
     enum sim_control control;
     const char *label, *keys;
@@ -39,7 +40,7 @@ struct ui_state {
     int rotation[SDL_arraysize(knobs)];
     unsigned pressed[SDL_arraysize(buttons)];
     int knob, button, delta, click;
-    bool dragged;
+    bool dragged, demo_playing;
 };
 
 static void color(SDL_Renderer *r, uint32_t rgb)
@@ -128,7 +129,17 @@ static void redraw(SDL_Renderer *r, SDL_Texture *screen, const char *title,
     }
     disk(r, 538, 426, 5, led_color(led));
     text(r, 553, 420, 2, muted, "Effect LED");
-    text(r, 751, 424, 1, muted, "Enter: PARA push");
+    if (sim_live_demo_available()) {
+        bool playing = ui->demo_playing;
+        int x = demo.x + demo.w / 2;
+        fill(r, demo.x, demo.y, demo.w, demo.h, playing ? accent : 0x2b3440);
+        center_text(r, x, demo.y + 7, 2, playing ? 0x14221f : ink,
+                    playing ? "Stop Sample" : "Play Sample");
+        center_text(r, x, demo.y + 27, 1, playing ? 0x14221f : muted, "[SPACE]");
+        text(r, 531, 447, 1, muted, "Enter: PARA push");
+    } else {
+        text(r, 751, 424, 1, muted, "Enter: PARA push");
+    }
     fill(r, 24, 474, WIDTH - 48, 1, 0x303843);
     snprintf(audio, sizeof audio, "JACK: OpenGP5 GP-50 / in, out_l, out_r | DSP %u Hz", rate);
     text(r, 24, 490, 2, muted, audio);
@@ -167,8 +178,12 @@ static void mouse_button(struct ui_state *ui, const SDL_MouseButtonEvent *event)
         SDL_CaptureMouse(SDL_FALSE);
         return;
     }
+    SDL_Point point = { event->x, event->y };
+    if (SDL_PointInRect(&point, &demo) && sim_live_demo_available()) {
+        sim_live_control(SIM_DEMO, !ui->demo_playing);
+        return;
+    }
     for (unsigned i = 0; i < SDL_arraysize(buttons); i++) {
-        SDL_Point point = { event->x, event->y };
         if (!SDL_PointInRect(&point, &buttons[i].rect)) continue;
         ui->button = (int)i;
         press(ui, ui->button, MOUSE, true);
@@ -193,6 +208,8 @@ static bool handle(SDL_Renderer *r, struct ui_state *ui, const SDL_Event *event)
         SDL_Keycode key = event->key.keysym.sym;
         bool down = event->type == SDL_KEYDOWN;
         if (key == SDLK_ESCAPE && down) return false;
+        if (key == SDLK_SPACE && down && !event->key.repeat && sim_live_demo_available())
+            sim_live_control(SIM_DEMO, !ui->demo_playing);
         for (unsigned i = 0; i < SDL_arraysize(buttons); i++)
             if (buttons[i].key == key) press(ui, (int)i, KEY, down);
         for (unsigned i = 0; down && i < SDL_arraysize(knobs); i++) {
@@ -260,6 +277,7 @@ int sim_live_ui(const char *title, unsigned rate)
             SDL_Event event;
             while (show && SDL_PollEvent(&event)) show = handle(renderer, &ui, &event);
             if (show) {
+                ui.demo_playing = sim_live_demo_playing();
                 redraw(renderer, screen, title, &ui, rate);
                 SDL_Delay(16);
             }

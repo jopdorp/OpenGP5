@@ -26,6 +26,7 @@ No pedal needed (docs/platform/simulator.md).
                   with the line it happened on (slower)
   --gp50          160 x 128 screen and extra inputs, e.g. "left turn 2", "save click", "fs2 down"
   --live          open the GP-50 window with JACK audio ports (requires --gp50)
+  --demo WAV      add a playable demo clip to the live window
 The log (gp5_log on either processor) and the LEDs print as the run goes. The timing is the pedal's: 64-sample
 blocks, fw_tick every 10 ms, the PARA hold at 0.6 s, the audio link's words three blocks on. The arithmetic is the
 pedal's maths code compiled for the computer; cycle counts are not simulated (gp5_link.py status on the pedal).
@@ -37,7 +38,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "platform"))
 import manifest                                         # noqa: E402
-from run_effect import read_wav, tone                   # noqa: E402
+from run_effect import read_pcm_wav, read_wav, tone     # noqa: E402
 
 GP50_ENCODERS = ("left", "middle", "right")
 GP50_BUTTONS = ("drum", "exit", "global", "save", "fs2")
@@ -147,8 +148,11 @@ def main():
     ap.add_argument("--store"); ap.add_argument("--files")
     ap.add_argument("--gp50", action="store_true", help="simulate the GP-50 screen size and inputs")
     ap.add_argument("--live", action="store_true", help="open a GP-50 window and JACK audio ports")
+    ap.add_argument("--demo", metavar="WAV", help="enable sample playback in the live window")
     ap.add_argument("--check", action="store_true", help="build with the address and undefined-behaviour checkers")
     a = ap.parse_args()
+    if a.demo and not a.live:
+        ap.error("--demo requires --live")
     fw = firmware_dir(a.firmware).resolve()
     try: m = manifest.load(fw)
     except manifest.ManifestError as e: sys.exit(str(e))
@@ -159,8 +163,20 @@ def main():
         if any((a.inp, a.out, a.script, a.seconds, a.shots, a.tone, a.store, a.files, a.knob != 255)):
             ap.error("--live takes input from the window and JACK. Use offline options without --live.")
         with tempfile.TemporaryDirectory(prefix="opengp5-live-") as d:
-            lib, exe = build(fw, m, pathlib.Path(d), a.check, a.gp50, a.live)
-            return subprocess.call([str(exe), str(lib), m["name"]])
+            d = pathlib.Path(d)
+            demo_args = []
+            if a.demo:
+                try:
+                    samples, rate = read_pcm_wav(a.demo)
+                except (OSError, EOFError, wave.Error) as e:
+                    ap.error(f"{a.demo}: {e}")
+                if not samples:
+                    ap.error(f"{a.demo}: empty demo clip")
+                raw = d / "demo.raw"
+                raw.write_bytes(samples.tobytes())
+                demo_args = [str(raw), str(rate)]
+            lib, exe = build(fw, m, d, a.check, a.gp50, a.live)
+            return subprocess.call([str(exe), str(lib), m["name"], *demo_args])
     rate = m["audio"]["sample_rate"]
     names, choices, shown = param_names(fw)
     script = pathlib.Path(a.script).read_text() if a.script else ""

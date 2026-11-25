@@ -37,6 +37,10 @@ or a JACK patchbay, connect your source to `OpenGP5 GP-50:in` and connect
 unconnected at startup. It processes audio at the firmware's sample rate and
 resamples when the audio graph uses a different rate.
 
+Add `--demo guitar.wav` with a 16-bit or 24-bit PCM WAV. Click **Play Sample**
+or press **Space** to send the first channel through the firmware. Press again
+to stop. The simulator returns to the JACK input when playback ends.
+
 ## A script
 
 One line per action, the time in seconds first:
