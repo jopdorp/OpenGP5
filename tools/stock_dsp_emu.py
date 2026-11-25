@@ -43,7 +43,45 @@ def stock_section(path):
     return model, section
 
 
-def trace(model, section, factory_data=None):
+def stock_factory_data(path, model):
+    _, factory_data = htfw.read_section(path, 0x67)
+    if sha256(factory_data).hexdigest() != FACTORY_HASH[model]:
+        raise ValueError(f"unrecognized {model} factory data")
+    return factory_data
+
+
+def uart_frame(payload):
+    return struct.pack("<BHB", crc8(payload), len(payload) + 4, 1) + payload
+
+
+def catalog_replies(path):
+    model, section = stock_section(path)
+    if model != "GP-50":
+        raise ValueError("expected GP-50 stock firmware for catalog replay")
+    factory_data = stock_factory_data(path, model)
+    replies = {}
+    for opcode, count in ((0x2002, 41), (0x7002, 80)):
+        for slot in range(count):
+            query = struct.pack("<HHI", opcode, 8, slot)
+            report = trace(model, section, factory_data, uart_frame(query))
+            replies.setdefault((0x6000, 0), bytes.fromhex(report["version_reply"]))
+            reply = bytes.fromhex(report["uart_reply"])
+            size = int.from_bytes(reply[1:3], "little")
+            if (not 12 <= size <= len(reply) or reply[0] != crc8(reply[4:size]) or
+                    reply[3] != 1 or reply[4:6] != query[:2] or reply[8:10] != query[4:6]):
+                raise ValueError(f"invalid catalog reply for {opcode:#x} slot {slot}: {reply.hex(' ')}")
+            replies[opcode, slot] = reply
+    return replies
+
+
+def replay_uart(path, requests):
+    model, section = stock_section(path)
+    factory_data = stock_factory_data(path, model)
+    return [bytes.fromhex(trace(model, section, factory_data, request)["uart_reply"])
+            for request in requests]
+
+
+def trace(model, section, factory_data=None, uart_request=None):
     from unicorn import Uc, UC_ARCH_ARM, UC_HOOK_CODE, UC_HOOK_MEM_WRITE, UC_MODE_MCLASS, UC_MODE_THUMB
     from unicorn.arm_const import (
         UC_ARM_REG_CONTROL, UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R1, UC_ARM_REG_SP,
@@ -93,10 +131,9 @@ def trace(model, section, factory_data=None):
 
     if factory_data is not None:
         writes.clear()
-        main_loop, reply, peak, muted_peak = runtime(cpu, model, section, run, checkpoint)
-        return {"model": model, "reset_checkpoint": hex(checkpoint), "main_loop": hex(main_loop),
-                "boot": boot_writes, "runtime": writes, "version_reply": reply.hex(" "),
-                "audio_peak": peak, "muted_peak": muted_peak,
+        checks = runtime(cpu, model, section, run, checkpoint, uart_request)
+        return {"model": model, "reset_checkpoint": hex(checkpoint),
+                "boot": boot_writes, "runtime": writes, **checks,
                 "i2c_wire_bytes": [data.hex(" ") for data in i2c]}
 
     def call(address):
@@ -112,7 +149,7 @@ def trace(model, section, factory_data=None):
             "uart": uart_writes, "audio": audio_writes, "i2c_wire_bytes": [data.hex(" ") for data in i2c]}
 
 
-def runtime(cpu, model, section, run, checkpoint):
+def runtime(cpu, model, section, run, checkpoint, uart_request):
     from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE
     from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1
 
@@ -125,6 +162,7 @@ def runtime(cpu, model, section, run, checkpoint):
     sfi = 0x40050000
     rx, tx = deque(), bytearray()
     command = 0
+    rx_status = 4
     waits = dict(zip(delay_loops, (UC_ARM_REG_R1, UC_ARM_REG_R0)))
 
     def delay(mu, pc, _size, _data):
@@ -143,7 +181,7 @@ def runtime(cpu, model, section, run, checkpoint):
 
     def uart_read(mu, _access, address, _size, _value, _data):
         if address == uart + 0xC:
-            mu.mem_write(address, struct.pack("<I", (len(rx) << 4) | 4 if rx else 0))
+            mu.mem_write(address, struct.pack("<I", (len(rx) << 4) | rx_status if rx else 0))
         elif address == uart and rx:
             mu.mem_write(address, struct.pack("<I", rx.popleft()))
 
@@ -157,24 +195,33 @@ def runtime(cpu, model, section, run, checkpoint):
         run(handler, RETURN, 100_000)
         cpu.context_restore(before)
 
-    def frame(payload):
-        return struct.pack("<BHB", crc8(payload), len(payload) + 4, 1) + payload
-
     def step_main(count=10_000):
         cpu.emu_start(cpu.reg_read(UC_ARM_REG_PC) | 1, 0, count=count)
 
-    def send(payload):
+    def exchange(packet, tx_interrupts=1):
+        nonlocal rx_status
         tx.clear()
-        rx.extend(frame(payload))
+        while len(packet) > 16 - len(rx):
+            # The FIFO watermark handler leaves one byte for the timeout IRQ.
+            count = 16 - len(rx)
+            rx.extend(packet[:count])
+            packet = packet[count:]
+            rx_status = 0x400
+            irq(rx_vector)
+            if len(rx) != 1:
+                raise ValueError(f"{model} UART FIFO watermark failed")
+        rx.extend(packet)
+        rx_status = 4
         irq(rx_vector)
         step_main(100_000)
-        irq(rx_vector - 1)
+        for _ in range(tx_interrupts):
+            irq(rx_vector - 1)
         if rx:
             raise ValueError(f"{model} left {len(rx)} bytes in the UART FIFO")
         return bytes(tx)
 
     def expect_ack(payload):
-        reply = send(payload)
+        reply = exchange(uart_frame(payload))
         if reply != b"\x01\x04\x00\x14":
             raise ValueError(f"{model} rejected {payload.hex(' ')}: {reply.hex(' ')}")
 
@@ -186,9 +233,13 @@ def runtime(cpu, model, section, run, checkpoint):
     cpu.hook_add(UC_HOOK_MEM_WRITE, uart_write, begin=uart, end=uart)
 
     run(checkpoint, main_loop, 5_000_000)
-    reply = send(struct.pack("<HHI", 0x6000, 8, 0))
-    if reply != frame(struct.pack("<HHII", 0x6000, 12, 1, version)):
+    reply = exchange(uart_frame(struct.pack("<HHI", 0x6000, 8, 0)))
+    if reply != uart_frame(struct.pack("<HHII", 0x6000, 12, 1, version)):
         raise ValueError(f"unexpected {model} UART version reply: {reply.hex(' ')}")
+    report = {"main_loop": hex(main_loop), "version_reply": reply.hex(" ")}
+    if uart_request is not None:
+        # A catalog entry spans several transmit FIFO refills.
+        return {**report, "uart_reply": exchange(uart_request, tx_interrupts=8).hex(" ")}
     expect_ack(struct.pack("<HHIf", 0x1001, 12, 0, 1.0))  # output level
     expect_ack(struct.pack("<HHIf", 0x1001, 12, 4, 1.0))  # second stock gain
     expect_ack(struct.pack("<HHII", 0x0002, 12, 0, 100))  # preset level
@@ -199,7 +250,7 @@ def runtime(cpu, model, section, run, checkpoint):
     muted_peak = tone_replay(cpu, irq, step_main)
     if peak < (1 << 20) or muted_peak > 1:
         raise ValueError(f"{model} audio level check failed: active {peak}, muted {muted_peak}")
-    return main_loop, reply, peak, muted_peak
+    return {**report, "audio_peak": peak, "muted_peak": muted_peak}
 
 
 def tone_replay(cpu, irq, step_main):
@@ -246,11 +297,7 @@ def main():
     args = parser.parse_args()
     try:
         model, section = stock_section(args.image)
-        factory_data = None
-        if args.runtime:
-            _, factory_data = htfw.read_section(args.image, 0x67)
-            if sha256(factory_data).hexdigest() != FACTORY_HASH[model]:
-                raise ValueError(f"unrecognized {model} factory data")
+        factory_data = stock_factory_data(args.image, model) if args.runtime else None
         report = trace(model, section, factory_data)
     except (OSError, ValueError, ImportError, zipfile.BadZipFile) as exc:
         parser.exit(1, f"error: {exc}\n")

@@ -91,19 +91,26 @@ def gp50_warm_handoff():
     return commands
 
 
-def stock_radio(model, presets):
+def stock_radio(model, flash, flash_base):
     settings, entropy, clock, wait = STOCK_RADIO[model]
     # Use the verified stock preset section and erased user storage. Reads use
     # the stock driver, with the NOR data register fed from the emulated image.
     # The erase and program operations update only this simulator's memory.
-    commands = [f"restore {presets} binary 0x190000", "set $flash_reads = 0"]
+    commands = [f"restore {flash} binary {flash_base:#x}", f"set $flash_base = {flash_base:#x}", r"""
+define read_stock_nor
+  set $offset = $r10 + $r9 - $r6
+  if $offset < $flash_base || $offset + 4 > 0x200000
+    printf "unmodeled NOR read at %#x\n", $offset
+    quit 1
+  end
+  set {unsigned int}0x40007000 = *(unsigned int *)$offset
+end
+set $flash_reads = 0
+"""]
     for read in (0x1104e, 0x1105e):
         commands.extend([
             f"break *{read:#x}", "commands", "silent",
-            "set $offset = $r10 + $r9 - $r6",
-            "if $offset < 0x190000 || $offset + 4 > 0x200000",
-            '  printf "unmodeled NOR read at %#x\\n", $offset', "  quit 1", "end",
-            "set {unsigned int}0x40007000 = *(unsigned int *)$offset",
+            "read_stock_nor",
             "set $flash_reads = $flash_reads + 1", "continue", "end",
         ])
     commands.append(r"""
@@ -162,13 +169,229 @@ end
     return commands
 
 
-def stock(andes, image, warm_handoff=False, radio=False):
+def gp50_stock_cold(wire, requests):
+    # Deliver stock FreeRTOS switches and ticks explicitly because Andes sim
+    # lacks the interrupt controller and IRET. Defer the packed Bluetooth task
+    # after calibration so its alignment faults do not prevent the LCD check.
+    return [f"restore {wire} binary 0x90000000", r"""
+define switch_stock_task
+  set $resume = $pc
+  set $saved_r0 = $r0
+  set $saved_r1 = $r1
+  set $pc = 0x11aac
+  si
+  set $psw = $r0
+  set $r0 = $resume
+  set $r1 = $psw
+  set $pc = 0x11b5a
+  si 2
+  set $r0 = ($psw & ~1) + 2
+  set $pc = 0x11ab2
+  si
+  set $r0 = $saved_r0
+  set $r1 = $saved_r1
+  set $pc = 0x10038
+  tbreak *0x11e6c
+  continue
+  set $task_pc = $r1
+  set $task_psw = $r2
+  tbreak *0x11e94
+  continue
+  set $task_r0 = $r0
+  set $r0 = $task_psw
+  set $pc = 0x11ab2
+  si
+  set $r0 = $task_r0
+  set $pc = $task_pc
+end
+define tick_stock_idle
+  set $tick_lp = $lp
+  set $tick_r0 = $r0
+  set $tick_r1 = $r1
+  set $tick_r2 = $r2
+  set $tick_r3 = $r3
+  set $tick_r4 = $r4
+  set $tick_r5 = $r5
+  set $tick_r15 = $r15
+  set $woken = 0
+  while !$woken && $ticks < 950
+    set $pc = 0x5bdb6
+    set $lp = 0x100f0
+    tbreak *0x100f0
+    continue
+    set $woken = $r0
+    set $ticks = $ticks + 1
+  end
+  set $pc = 0x5bf9c
+  set $lp = $tick_lp
+  set $r0 = $tick_r0
+  set $r1 = $tick_r1
+  set $r2 = $tick_r2
+  set $r3 = $tick_r3
+  set $r4 = $tick_r4
+  set $r5 = $tick_r5
+  set $r15 = $tick_r15
+end
+set $ticks = 0
+set $switches = 0
+set $pending = 0
+set $catalog = 0
+set $acks = 0
+set $rows = 0
+set $windows = 0
+set $lcd = 0
+set $ui_bottom = 127
+set $ui_bytes = 0
+set {unsigned int}0x40010000 = 0x8000
+set {unsigned int}0x40010030 = 0x10
+set {unsigned int}0x40003014 = 0x4000
+break *0x5b4b8
+set $yield_bp = $bpnum
+break *0x5bf9c
+break *0x4ab3e
+tbreak *0x27914
+break *0x48712 if $r1 >= 12 && $r0 != 0
+break *0x5ea5c if $lp == 0x14a62 && $pending
+tbreak *0x4604c
+break *0x46212
+break *0x46238
+break *0x11050 if ($r7 & 3) != 0
+break *0x47d74
+break *0x62a0a
+tbreak *0x2792c
+tbreak *0x27960
+break *0x405b8
+continue
+while $pc != 0x27960 && $ticks < 950 && $switches < 9000
+  set $event = (unsigned int)$pc
+  if $event == 0x5b4b8 || $event == 0x5bf9c
+    if $event == 0x5bf9c
+      tick_stock_idle
+    end
+    switch_stock_task
+    set $switches = $switches + 1
+    if $pc == 0x55dbc
+      set $lp = $pc
+      set $r0 = 1000
+      set $pc = 0x5bf60
+    end
+    if $pc == 0x5b4b8
+      disable $yield_bp
+      si
+      enable $yield_bp
+    end
+  end
+  if $event == 0x4ab3e
+    set {unsigned short}$r0 = 0x0201
+  end
+  if $event == 0x27914
+    """ + check("run", "0x27914") + r"""
+  end
+  if $event == 0x48712
+    set $frame = *(unsigned int *)($r0 + 4)
+    set $cmd = *(unsigned short *)($frame + 4)
+    set $size = *(unsigned short *)($frame + 6)
+    set $slot = *(unsigned int *)($frame + 8)
+    set $record = -1
+    if *(unsigned short *)($frame + 1) != $r1 || $size + 4 != $r1
+      printf "unexpected stock UART length for %#x\n", $cmd
+      quit 1
+    end
+    if *(unsigned char *)($frame + 3) == 1
+      if $cmd == 0x6000 && $slot == 0
+        set $record = 0
+      end
+      if $cmd == 0x2002 && $slot < 41
+        set $record = $slot + 1
+      end
+      if $cmd == 0x7002 && $slot < 80
+        set $record = $slot + 42
+      end
+    end
+    if *(unsigned char *)($frame + 3) == 0
+""" + "\n".join(
+        f"      if $cmd == {opcode:#x} && $size == {length} && $acks == {index}\n"
+        f"        dump binary memory {requests[index]} $frame ($frame + $r1)\n"
+        f"        set $record = 122\n        set $acks = $acks + 1\n      end"
+        for index, (opcode, length) in enumerate(((0x1000, 17), (0x1001, 12), (0, 368)))
+    ) + r"""
+    end
+    if $record >= 0
+      set $reply = 0x90000000 + $record * 0x100
+      set $pending = *(unsigned char *)($reply + 1) | (*(unsigned char *)($reply + 2) << 8)
+    end
+  end
+  if $event == 0x5ea5c
+    set $buffer = *(unsigned int *)($r3 + 0x18)
+    set $capacity = *(unsigned short *)($r3 + 4)
+    set $write = *(unsigned short *)($r3 + 8)
+    set $i = 0
+    while $i < $pending
+      set {unsigned char}($buffer + (($write + $i) % $capacity)) = *(unsigned char *)($reply + $i)
+      set $i = $i + 1
+    end
+    set {unsigned short}($r3 + 8) = ($write + $pending) % $capacity
+    set $pending = 0
+  end
+  if $event == 0x4604c
+    """ + check("version", "0x4604c && *(unsigned int *)($r0 + 4) == 0x01010005") + r"""
+  end
+  if $event == 0x46212 || $event == 0x46238
+    set $catalog = $catalog + 1
+  end
+  if $event == 0x1104e || $event == 0x1105e
+    read_stock_nor
+  end
+  if $event == 0x11050
+    set $i = 0
+    while $i < 4
+      set {unsigned char}($r7 + $i) = $r0 >> ($i * 8)
+      set $i = $i + 1
+    end
+    set $r7 = $r7 + 4
+    set $pc = 0x11052
+  end
+  if $event == 0x47d74 && $r0 == 0 && $r1 == 159 && $r2 == $windows && $r3 == $windows + 1
+    set $windows = $windows + 1
+  end
+  if $event == 0x62a0a
+    if $r1 == 320
+      set $rows = $rows + 1
+    end
+    if $lcd == 2 && $r1 > 320
+      set $ui_bytes = $ui_bytes + $r1
+    end
+    if $r1 == 1 && (*(unsigned int *)0x40010004 & 0x80) == 0
+      if *(unsigned char *)$r0 == 0x11 && $lcd == 0
+        set $lcd = 1
+      end
+      if *(unsigned char *)$r0 == 0x29 && $lcd == 1 && $rows == 128
+        set $lcd = 2
+      end
+    end
+  end
+  if $event == 0x2792c
+    """ + check("panel", "0x2792c && $catalog == 121 && $acks == 3 && $lcd == 2 && $windows == 128") + r"""
+  end
+  if $event == 0x405b8
+    if *(unsigned short *)$r1 == 0 && *(unsigned short *)($r1 + 4) == 159 && *(unsigned short *)($r1 + 6) == $ui_bottom
+      set $ui_bottom = (int)*(unsigned short *)($r1 + 2) - 1
+    end
+  end
+  continue
+end
+""" + check("app", "0x27960 && $ui_bottom == -1 && $ui_bytes == 40960")]
+
+
+def stock(andes, image, warm_handoff=False, radio=False, cold=False):
     model, app = htfw.read_section(image, 0x62)
     boot = STOCK.get(model)
     if boot is None or sha256(app).hexdigest() != boot.sha256:
         raise ValueError(f"unrecognized {model} stock control section")
     if warm_handoff and model != "GP-50":
         raise ValueError("warm handoff replay requires the GP-50 stock image")
+    if cold and model != "GP-50":
+        raise ValueError("stock cold replay requires the GP-50 stock image")
     with TemporaryDirectory() as directory:
         stub = Path(directory)
         (stub / "app.bin").write_bytes(app)
@@ -208,17 +431,33 @@ def stock(andes, image, warm_handoff=False, radio=False):
         ]
         expected = ["tlb", "efuse", "pll", "audiopll", "calibrated", "scheduler", "task", "adc", "board"]
         sim = SIM
-        if radio:
+        if radio or cold:
             _, presets = htfw.read_section(image, 0x65)
             flash = stub / "flash.bin"
-            flash.write_bytes(presets.ljust(0x70000, b"\xff"))
+            flash_base = 0x166000 if cold else 0x190000
+            flash.write_bytes(b"\xff" * (0x190000 - flash_base) + presets.ljust(0x70000, b"\xff"))
             sim += " --memory-region 0x80000000,0x10000"
-            commands.extend(stock_radio(model, flash))
+            commands.extend(stock_radio(model, flash, flash_base))
             expected.extend(["settings", "entropy", "radio"])
+        if cold:
+            from stock_dsp_emu import catalog_replies, replay_uart
+
+            replies = catalog_replies(image)
+            wire = stub / "wire.bin"
+            ack = b"\x01\x04\x00\x14"
+            wire.write_bytes(b"".join(reply.ljust(0x100, b"\0") for reply in replies.values()) + ack)
+            requests = [stub / f"uart-{index}.bin" for index in range(3)]
+            sim += " --memory-region 0x90000000,0x10000"
+            commands.extend(gp50_stock_cold(wire, requests))
+            expected.extend(["run", "version", "panel", "app"])
         if warm_handoff:
             commands.extend(gp50_warm_handoff())
             expected.extend(["ack", "delayone", "delaytwo", "handoff"])
         checkpoints(andes, stub / "app.elf", commands, expected, sim)
+        if cold:
+            if replay_uart(image, [path.read_bytes() for path in requests]) != [ack] * len(requests):
+                raise ValueError("the stock DSP did not acknowledge the captured startup commands")
+            print("Stock DSP accepted the three captured startup writes")
 
 
 def open_elf_tlb(andes, elf, gp50=False):
@@ -325,19 +564,21 @@ def main():
                             help="replay the stock GP-50 update-mode request up to the factory-loader jump")
     stock_mode.add_argument("--stock-radio", action="store_true",
                             help="continue stock startup through modeled settings flash and Bluetooth radio setup")
+    stock_mode.add_argument("--stock-cold", action="store_true",
+                            help="run GP-50 stock startup through the LCD using stock DSP UART replies")
     args = parser.parse_args()
     if args.gp50_warm_handoff and not args.stock:
         parser.error("--gp50-warm-handoff requires --stock")
-    if args.stock_radio and not args.stock:
-        parser.error("--stock-radio requires --stock")
+    if (args.stock_radio or args.stock_cold) and not args.stock:
+        parser.error("stock startup replay requires --stock")
     try:
         if args.stock:
-            stock(args.andes_bin, args.stock, args.gp50_warm_handoff, args.stock_radio)
+            stock(args.andes_bin, args.stock, args.gp50_warm_handoff, args.stock_radio, args.stock_cold)
         elif args.gp50_app:
             gp50_app(args.andes_bin, args.gp50_app)
         else:
             open_app(args.andes_bin, args.open_elf)
-    except (OSError, ValueError, subprocess.SubprocessError, zipfile.BadZipFile) as exc:
+    except (OSError, ValueError, ImportError, subprocess.SubprocessError, zipfile.BadZipFile) as exc:
         detail = getattr(exc, "stdout", "") or ""
         parser.exit(1, f"error: {exc}\n{detail}")
 

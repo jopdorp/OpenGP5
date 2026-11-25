@@ -91,6 +91,7 @@ installed by [toolchain setup](setup.md), and Unicorn 2.1 or newer.
 python3 tools/stock_control_emu.py --stock path/to/gp5.zip
 python3 tools/stock_control_emu.py --stock path/to/gp50.zip
 python3 tools/stock_control_emu.py --stock path/to/gp50.zip --stock-radio
+python3 tools/stock_control_emu.py --stock path/to/gp50.zip --stock-cold
 python3 tools/stock_control_emu.py --stock path/to/gp50.zip --gp50-warm-handoff
 python3 tools/stock_dsp_emu.py path/to/gp5.zip > gp5-dsp.json
 python3 tools/stock_dsp_emu.py path/to/gp50.zip > gp50-dsp.json
@@ -112,6 +113,13 @@ presets, models NOR writes and supplies entropy and calibration status. It
 checks settings and Bluetooth configuration records and the stock radio clock
 latch sequence. Discovery, pairing and audio over Bluetooth require radio and
 peer device behavior beyond this fixture.
+
+The GP-50 `--stock-cold` check supplies a power-on event, delivers stock
+FreeRTOS scheduler events, and replays Cortex-M4 UART replies through the
+control processor's receive DMA. It checks the startup preset and settings
+commands, runs the original LCD initialization and checks the first complete
+LVGL frame before the app loop. The fixture supplies NOR and SPI status and
+defers the Bluetooth service task.
 
 The DSP harness reports the last write to each register per phase. By default
 it replays selected init routines after the reset checkpoint. With `--runtime`
