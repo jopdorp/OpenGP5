@@ -13,7 +13,8 @@ export PATH=$ROOT/fw-build/andes/v3s/nds32le-elf-mculib-v3s/bin:$PATH
 APP=$ROOT/platform/nds32
 FW=${GP5_FIRMWARE_DIR:-$ROOT/firmwares/${GP5_FIRMWARE:-passthrough}}/nds32     # the firmware's own UI / control code
 O=$APP/out
-if [ "${GP50_BOARD:-0}" = 1 ]; then O=$O/gp50; fi
+if [ -n "${GP5_NDS32_OUT:-}" ]; then O=$ROOT/$GP5_NDS32_OUT
+elif [ "${GP50_BOARD:-0}" = 1 ]; then O=$O/gp50; fi
 mkdir -p "$O/gen"; cd "$O"; rm -f ./*.o app.elf app.bin app.dis app.sym app.map app.ld init-default.c
 INC="-I$APP -I$FW -I$FW/.. -I$APP/../dsp"   # $FW/..: the firmware's params.h (1.0)     # last: gp5_math.h / gp5_math.c, the maths both processors can use
 CF="-std=gnu99 -DUI_PANEL -mcpu=d1088-spu -mext-dsp -mext-zol -mcmodel=medium -Os -g -Wall -fmessage-length=0 -fsingle-precision-constant -ffunction-sections -fdata-sections $INC"

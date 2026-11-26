@@ -179,6 +179,19 @@ The emulator build uses one cold-start control output pattern. The power-state
 transitions, analog input and output routing, MIDI and USB behavior, and the
 cold-start recovery path still need physical verification.
 
+### Experimental update package
+
+```sh
+platform/build_firmware.sh --gp50-package tremolo build/GP-50_tremolo-experimental.bin
+python3 tools/htfw.py info build/GP-50_tremolo-experimental.bin
+```
+
+The build packages the GP-50 DSP and control binaries as sections `0x63`
+and `0x62`, using the V1.0.5 container layout and freshly computed section
+checksums. The two sections contain OpenGP5 code. The build runs offline.
+The stock updater's acceptance of this package, re-entry from the custom
+control app, and cold recovery still need testing on the pedal.
+
 ### Processor link and USB
 
 A separate register-level replay used the two compiled GP-50 tremolo binaries.
