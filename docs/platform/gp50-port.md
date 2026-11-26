@@ -48,11 +48,12 @@ right knobs from shift input pairs 4/5, 0/1 and 2/3. Buttons are active low.
 DRUM, EXIT, GLOBAL and SAVE use bits 6, 7, 12 and 13. Output bit 6
 switches the expression ADC between its first two readings.
 
-GP-50 initializes the panel at `0x47e48` and draws windows at `0x47d74`.
-It uses MADCTL `0x68`, COLMOD `0x55` and a zero drawing offset. GP-5's
-normal stock drawing offset is +1, +26. The simulator ran the LCD GPIO
-and PWM setup and captured the panel commands with SPI sends and delays
-intercepted.
+Stock GP-50 initializes the panel at `0x47e48` and draws windows at `0x47d74`.
+It uses MADCTL `0x68`, COLMOD `0x55` and a zero drawing offset. Its display
+driver enables 180° software rotation at `0x4061a`. OpenGP5 uses MADCTL `0xA8`
+to rotate the display in the panel. GP-5's normal stock drawing offset is
++1, +26. The simulator ran the LCD GPIO and PWM setup and captured the panel
+commands with SPI sends and delays intercepted.
 
 GP-50 control outputs 0–7 also participate in its Off/Charge/Run state machine,
 including analog bypass and power. Those outputs need a board-specific startup
