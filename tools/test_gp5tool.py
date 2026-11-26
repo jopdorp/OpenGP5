@@ -117,6 +117,17 @@ def tiny_dsp():
     return bytes(d)
 
 
+def tiny_gp50_programs():
+    app = bytearray(tiny_app())
+    template = ROOT / "platform" / "nds32" / "header_a4_ff.bin"
+    app[0xA4:0x108] = template.read_bytes() + bytes.fromhex("ff ff ff 00 ff ff dd 9e")
+    app[0x108:0x115] = b"GP-50 Open FW"
+    dsp = bytearray(tiny_dsp().ljust(0xB874, b"\xff"))
+    dsp[8:12] = b"V105"
+    struct.pack_into("<I", dsp, 0x404, 0x4501)
+    return app, dsp
+
+
 class PartialImages(unittest.TestCase):
     """This project's images: only the sections we build, no Valeton file needed."""
     def test_pack_then_load(self):
@@ -144,13 +155,8 @@ class PartialImages(unittest.TestCase):
 
 class GP50Package(unittest.TestCase):
     def test_gp50_container_preserves_payloads_and_refuses_foreign_dsp(self):
-        nds32 = ROOT / "platform" / "nds32"
-        pack = runpy.run_path(str(nds32 / "pack.py"))["gp50_image"]
-        app = bytearray(tiny_app())
-        app[0xA4:0x108] = (nds32 / "header_a4_ff.bin").read_bytes() + bytes.fromhex("ff ff ff 00 ff ff dd 9e")
-        dsp = bytearray(tiny_dsp().ljust(0xB874, b"\xff"))
-        dsp[8:12] = b"V105"
-        struct.pack_into("<I", dsp, 0x404, 0x4501)
+        pack = runpy.run_path(str(ROOT / "platform" / "nds32" / "pack.py"))["gp50_image"]
+        app, dsp = tiny_gp50_programs()
         image = pack(app, dsp)
         header = htfw.parse(image)
         self.assertEqual(header["product"], "GP-50")

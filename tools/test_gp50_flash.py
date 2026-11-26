@@ -1,12 +1,15 @@
 """Exercise GP-50 flash planning and the update transcript without USB or MIDI."""
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
+from runpy import run_path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
 import gp50_flash as flash
 from gp5_proto import CLASS_CMD, build_sysex
-from test_gp5tool import FakeLink, FakePedal, MODE_LOADER, MODE_STOCK
+from test_gp5tool import FakeLink, FakePedal, MODE_LOADER, MODE_STOCK, tiny_gp50_programs
 
 
 class CapturedLoader(FakePedal):
@@ -97,6 +100,24 @@ class UsbEndpoint(TestCase):
 
 
 class ReadOnlyCommands(TestCase):
+    def test_flash_rejects_app_overlapping_journal_before_discovery(self):
+        pack = run_path(str(flash.ROOT / "platform" / "nds32" / "pack.py"))["gp50_image"]
+        app, dsp = tiny_gp50_programs()
+        limit = 0x153000
+        image = pack(app.ljust(limit, b"\xff"), dsp)
+        oversized = flash.htfw.pack_uncompressed(image[:flash.htfw.HEADER_LEN], (
+            (0x63, 0x200000, 0, dsp), (0x62, 0, 0, app.ljust(limit + 1, b"\xff"))))
+        with TemporaryDirectory() as temp:
+            path = Path(temp) / "overlap.bin"
+            path.write_bytes(oversized)
+            errors = StringIO()
+            with patch.object(flash, "stock"), redirect_stderr(errors), \
+                    patch.object(flash, "endpoints", side_effect=AssertionError("MIDI discovery")):
+                with self.assertRaises(SystemExit) as stopped:
+                    flash.main(["flash", str(path), "--stock", "stock.zip"])
+            self.assertEqual(stopped.exception.code, 1)
+            self.assertIn("overlaps the GP-50 storage journal", errors.getvalue())
+
     def test_offline_checks_do_not_discover_or_open_midi(self):
         with patch.object(flash, "candidate", return_value=((0x63, b"dsp"),)), \
                 patch.object(flash, "stock", return_value=((0x62, b"app"),)), \

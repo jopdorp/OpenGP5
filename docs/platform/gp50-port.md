@@ -149,7 +149,7 @@ platform/build_firmware.sh passthrough
 (
   cd platform/nds32/out
   ../../../fw-build/andes/v3s/nds32le-elf-mculib-v3s/bin/nds32le-elf-gcc \
-    -Os -nostartfiles -static -mcmodel=medium -mext-dsp -mvh -T ../start/app.ld \
+    -Os -nostartfiles -static -mcmodel=medium -mext-dsp -mvh -T app.ld \
     -Wl,--gc-sections,--mno-ex9 -o app-emu.elf ./*.o -ldsp
 )
 python3 tools/stock_control_emu.py --open-elf platform/nds32/out/app-emu.elf

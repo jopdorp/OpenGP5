@@ -17,6 +17,7 @@ import gp5tool
 import htfw
 
 HDR0 = 0xA4
+GP50_APP_LIMIT = 0x153000
 
 
 def validate_app(app):
@@ -36,8 +37,8 @@ def validate_app(app):
 
 def gp50_image(app, dsp):
     validate_app(app)
-    if len(app) > 0x155338:
-        raise ValueError("control app exceeds the GP-50 V1.0.5 app section")
+    if len(app) > GP50_APP_LIMIT:
+        raise ValueError("control app overlaps the GP-50 storage journal at 0x163000")
     dsp_header = b"\xff" * 8 + b"V105\x00\x44\x00\x00" + bytes(0x400 - 16)
     if len(dsp) != 0xB874 or dsp[:0x400] != dsp_header:
         raise ValueError("expected a GP-50 V1.0.5-layout raw DSP section")

@@ -5,7 +5,12 @@ ENTRY(_start)
 
 MEMORY
 {
+#if GP50_BOARD == 1
+    /* GP-50 reserves two journal sectors starting at 0x163000. */
+    APP (rx)  : ORIGIN = 0x00010000, LENGTH = 0x153000
+#else
     APP (rx)  : ORIGIN = 0x00010000, LENGTH = 0x168000
+#endif
     RAM (rwx) : ORIGIN = 0x20004000, LENGTH = 0x44000 - 0x20   /* the top 32 bytes: the hand-over mark (main.c) */
 }
 
