@@ -177,8 +177,8 @@ python3 tools/simulate.py tremolo --gp50 --script controls.txt
 ```
 
 The build starts with the stock cold control output and enables the Run
-outputs before querying the DSP. Other power states, analog routing, MIDI,
-USB and cold-start recovery still need physical verification.
+outputs before querying the DSP. The corrected sequence still needs a
+hardware DSP and audio test.
 
 ### Experimental update package
 
@@ -190,8 +190,8 @@ python3 tools/htfw.py info build/GP-50_tremolo-experimental.bin
 The build packages the GP-50 DSP and control binaries as sections `0x63`
 and `0x62`, using the V1.0.5 container layout and freshly computed section
 checksums. The two sections contain OpenGP5 code. The build runs offline.
-The stock updater's acceptance of this package, re-entry from the custom
-control app, and cold recovery still need testing on the pedal.
+The factory updater accepted both sections in the first LiveWDF trial. The
+control app booted, but stalled while waiting for the DSP.
 
 On Linux, check the experimental build and the official V1.0.5 recovery image
 before connecting to the factory loader.
@@ -208,6 +208,11 @@ frames and section order from [Valeton Suite V1.0.9](https://www.valeton.net/wpf
 `flash` verifies the supplied stock recovery file before opening USB MIDI.
 Both `flash` and `restore` write the DSP and control program sections only.
 The tool stops if an erase or write acknowledgement is missing.
+
+The first trial's USB re-entry command restarted the control app. The pedal
+later entered factory update mode using the external footswitch in place of
+front-panel A, with PARA pressed at startup. The loader's USB identity and
+MIDI reply both matched the factory updater.
 
 ```sh
 python3 tools/gp50_flash.py flash build/GP-50_tremolo-experimental.bin --stock "GP-50 Firmware V1.0.5.zip"
@@ -255,4 +260,4 @@ The stock DSP references asset metadata at flash offsets
 `0x114000..0x121fff`, a SnapTone bank at `0x122000..0x157fff`, and the
 shared user IR and SnapTone bank at `0x158000..0x1cffff`. A full backup
 requires hardware readout of both processors' flash. The GP-50 probe pinout
-and cold recovery procedure still need confirmation.
+still needs confirmation.
