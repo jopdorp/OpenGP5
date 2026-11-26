@@ -54,12 +54,16 @@ slot 0, selector 12 with shift output bit 6 low. The other channel-12 slot is
 used in Dual FS mode. Selectors 11 and 10 serve voltage and power functions.
 The stock app filters analog changes at `0x4763c` and maps the sampled range
 at `0x444a8`. The factory calibration screen collects heel and toe extrema
-and rejects too little movement. [Valeton GP-50 V1.0.5 manual](https://www.valeton.net/download/312/online-manual/22311/gp-50_online-manual_en_firmware-v1-0-5-pdf.pdf)
+and rejects too little movement. Its saved endpoints are six raw counts above
+the heel and sixteen below the toe, with a minimum effective span of 51.
+[Valeton GP-50 V1.0.5 manual](https://www.valeton.net/download/312/online-manual/22311/gp-50_online-manual_en_firmware-v1-0-5-pdf.pdf)
 
 The emulator build samples selector 12 every 10 ms and reports changes
 through `fw_gp50_expression(0..255)`. The first reading establishes a
-baseline. It uses the full 12-bit ADC scale. The physical jack, pedal travel
-calibration, and the external footswitch modes need separate validation.
+baseline. The default raw range is 0..200, as in the stock factory settings.
+An application can read the latest ADC sample and set effective heel and toe
+bounds in RAM using the [firmware API](api.md). The physical jack, pedal travel
+and the external footswitch modes need separate validation.
 
 Stock GP-50 initializes the panel at `0x47e48` and draws windows at `0x47d74`.
 It uses MADCTL `0x68`, COLMOD `0x55` and a zero drawing offset. Its display

@@ -24,6 +24,12 @@
 #include "gp5_firmware.h"
 #include "gp5_fmt.h"
 #include "gp5_font.h"
+#ifdef GP50_BOARD
+#include "gp50_controls.h"
+
+int gp50_expression_read_raw(unsigned *value) { (void)value; return 0; }
+int gp50_expression_set_range(unsigned heel, unsigned toe) { return gp50_expression_range_valid(heel, toe); }
+#endif
 #ifdef GP5_HAS_PARAMS
 #include "gp5_params.h"
 void gp5_params_init(void);
