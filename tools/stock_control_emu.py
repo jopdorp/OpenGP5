@@ -610,7 +610,7 @@ tbreak *0
 continue
 set $power = *(unsigned int *)0x4000100c == 0x122 && *(unsigned int *)0x40022008 == 0
 set $dma = *(unsigned int *)0x4000d0e0 == 0 && *(unsigned int *)0x4000d100 == 0
-set $watchdog = *(unsigned int *)0x40020010 == 3 && *(unsigned int *)0x40020000 == 1
+set $watchdog = *(unsigned int *)0x40020010 == 8 && *(unsigned int *)0x40020000 == 1
 printf "UPDATE jump %d\n", $pc == 0 && $power && $dma && $watchdog
 """
 
