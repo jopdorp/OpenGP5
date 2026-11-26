@@ -9,9 +9,10 @@
 #define CLOCK GP5_PIN(5)
 #define PARA_ENCODER (GP5_PIN(2) | GP5_PIN(3))
 
-/* V1.0.5 cold USB-independent start with empty retained flags: both rings
- * white, stock power-control bits 3 and 4 set. Emulator only. */
+/* V1.0.5 cold start with empty retained flags. */
 #define COLD_OUTPUT 0x3f18u
+#define UPDATE_OUTPUT_BIT (1u << 1)
+#define RUN_OUTPUT_BITS (UPDATE_OUTPUT_BIT | (1u << 7))
 
 static const uint8_t encoder_bits[] = { 4, 0, 2 };
 static const uint8_t button_bits[] = { 6, 7, 12, 13, 15 };
@@ -21,6 +22,7 @@ static struct {
 } encoders[sizeof encoder_bits];
 static uint32_t quiet[sizeof button_bits];
 static uint16_t buttons;
+static uint16_t control_output = COLD_OUTPUT;
 uint16_t gp50_control_input;
 
 /* V1.0.5 0x4851e. Shift the high output byte first and receive the low input
@@ -66,14 +68,18 @@ void gp50_controls_init(void)
     gp5_reg_bits_set(GP5_GPIO_B_PU, CLOCK | DATA_IN);
     gp5_reg_bits_clear(GP5_GPIO_B_PU, PARA_ENCODER);
     gp5_reg_bits_clear(GP5_GPIO_B_PD, CLOCK | DATA_IN | PARA_ENCODER);
-    gp50_control_input = shift_controls(COLD_OUTPUT);
+    shift_controls(control_output);
+    /* V1.0.5 enters Run at 0x27d7c before its first DSP version query. */
+    gp5_delay_ms(50);
+    control_output |= RUN_OUTPUT_BITS;
+    gp50_control_input = shift_controls(control_output);
     for (unsigned i = 0; i < sizeof encoder_bits; i++)
         encoders[i].ab = (gp50_control_input >> encoder_bits[i]) & 3u;
 }
 
 void gp50_controls_sample(void)
 {
-    gp50_control_input = shift_controls(COLD_OUTPUT);
+    gp50_control_input = shift_controls(control_output);
     for (unsigned i = 0; i < sizeof encoder_bits; i++) {
         unsigned ab = (gp50_control_input >> encoder_bits[i]) & 3u;
         encoders[i].detents += gp50_encoder_delta(encoders[i].ab, ab);
@@ -84,8 +90,9 @@ void gp50_controls_sample(void)
 void gp50_controls_prepare_update(void)
 {
     /* V1.0.5 clears and clocks out bit 1 twice, waiting 100 ticks after each. */
+    control_output &= ~UPDATE_OUTPUT_BIT;
     for (unsigned i = 0; i < 2; i++) {
-        shift_controls(COLD_OUTPUT & ~(1u << 1));
+        shift_controls(control_output);
         gp5_delay_ms(100);
     }
 }

@@ -592,7 +592,7 @@ end
 break *gp50_controls_prepare_update
 commands
   silent
-  printf "UPDATE prepare %d\n", $acks == 3
+  printf "UPDATE prepare %d\n", $acks == 3 && control_output == 0x3f9a
   set {{unsigned int}} 0x4000100c = 0x100
   set {{unsigned int}} 0x4000d0e0 = 0xffffffff
   set {{unsigned int}} 0x4000d100 = 0xffffffff
@@ -602,7 +602,7 @@ end
 break *gp5_delay_ms
 commands
   silent
-  printf "UPDATE wait %d\n", $r0
+  printf "UPDATE wait %d %d\n", $r0, control_output == 0x3f98
   set $pc = $lp
   continue
 end
@@ -610,7 +610,7 @@ tbreak *0
 continue
 set $power = *(unsigned int *)0x4000100c == 0x122 && *(unsigned int *)0x40022008 == 0
 set $dma = *(unsigned int *)0x4000d0e0 == 0 && *(unsigned int *)0x4000d100 == 0
-set $watchdog = *(unsigned int *)0x40020010 == 3 && *(unsigned int *)0x40020000 == 1
+set $watchdog = *(unsigned int *)0x40020010 == 8 && *(unsigned int *)0x40020000 == 1
 printf "UPDATE jump %d\n", $pc == 0 && $power && $dma && $watchdog
 """
 
@@ -631,6 +631,13 @@ set {{unsigned int}} 0x40026034 = 1
 set {{unsigned int}} 0x40032034 = 1
 set {{unsigned int}} 0x40010000 = 0x8000
 set {{unsigned int}} 0x40010030 = 0x10
+tbreak *gp5_delay_ms
+commands
+  silent
+  printf "RUN settle %d\n", $r0 == 50 && control_output == 0x3f18
+  set $pc = $lp
+  continue
+end
 break *delay_ms
 commands
   silent
@@ -658,7 +665,7 @@ continue
 set $a_outputs = *(unsigned int *)0x40010018 & 0x11030080
 set $b_outputs = *(unsigned int *)0x40010048 & 0x60
 set $backlight = (*(unsigned int *)0x400100f4 & 0xf) == 0xa && *(unsigned int *)0x4002f024 == 3999
-printf "BOARD %d\n", $pc == (unsigned int)&usb_midi_init && gp5_stage == 8 && $a_outputs == 0x11030080 && $b_outputs == 0x60 && $backlight && gp50_control_input == 0xffff
+printf "BOARD %d\n", $pc == (unsigned int)&usb_midi_init && gp5_stage == 8 && $a_outputs == 0x11030080 && $b_outputs == 0x60 && $backlight && gp50_control_input == 0xffff && control_output == 0x3f9a
 """
     if warm_handoff:
         script += gp50_app_handoff()
@@ -684,13 +691,13 @@ printf "BOARD %d\n", $pc == (unsigned int)&usb_midi_init && gp5_stage == 8 && $a
     if spi != expected:
         raise ValueError("unexpected panel initialization or pixel window")
     delays = [int(line.split()[1]) for line in trace if line.startswith("DELAY ")]
-    if "BOARD 1" not in trace or delays[:6] != [1, 1, 130, 120, 10, 100]:
+    if "RUN settle 1" not in trace or "BOARD 1" not in trace or delays[:6] != [1, 1, 130, 120, 10, 100]:
         raise ValueError("unexpected board registers or panel reset timings")
     print("GP-50 reached USB initialization with the 160×128 panel, startup logo and backlight")
     if warm_handoff:
         actual = [line[7:] for line in trace if line.startswith("UPDATE ")]
         if actual != ["ack 1 1", "pending 1 1", "ack 2 1", "ack 3 1", "pending 3 1",
-                      "prepare 1", "wait 100", "wait 100", "jump 1"]:
+                      "prepare 1", "wait 100 1", "wait 100 1", "jump 1"]:
             raise ValueError(f"unexpected warm handoff: {actual}")
         print("GP-50 reached the loader entry after the USB ACK and two board settle delays")
 

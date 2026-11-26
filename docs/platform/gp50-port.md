@@ -176,9 +176,9 @@ printf '0.2 left turn 2\n0.4 middle turn 3\n0.6 right turn 1\n0.8 fs2 click\n' >
 python3 tools/simulate.py tremolo --gp50 --script controls.txt
 ```
 
-The emulator build uses one cold-start control output pattern. The power-state
-transitions, analog input and output routing, MIDI and USB behavior, and the
-cold-start recovery path still need physical verification.
+The build starts with the stock cold control output and enables the Run
+outputs before querying the DSP. Other power states, analog routing, MIDI,
+USB and cold-start recovery still need physical verification.
 
 ### Experimental update package
 
