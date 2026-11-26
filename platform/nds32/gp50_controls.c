@@ -22,8 +22,9 @@ static struct {
 static uint32_t quiet[sizeof button_bits];
 static uint16_t buttons;
 uint16_t gp50_control_input;
-static unsigned expression_filtered, expression_last, expression_pending;
-static int expression_sampled;
+static unsigned expression_raw, expression_filtered_q4, expression_last, expression_pending;
+static unsigned expression_heel, expression_toe = GP50_EXPRESSION_DEFAULT_TOE, expression_reported;
+static int expression_sampled, expression_remap;
 
 /* V1.0.5 0x4851e. Shift the high output byte first and receive the low input
  * byte first. The duplicate writes retain the stock latch and clock timing. */
@@ -111,23 +112,59 @@ void gp50_expression_init(void)
     gp5_adc_init();
 }
 
+int gp50_expression_read_raw(unsigned *value)
+{
+    if (!expression_sampled) return 0;
+    *value = expression_raw;
+    return 1;
+}
+
+int gp50_expression_set_range(unsigned heel, unsigned toe)
+{
+    if (!gp50_expression_range_valid(heel, toe)) return 0;
+    if (heel != expression_heel || toe != expression_toe) expression_remap = expression_sampled;
+    expression_heel = heel;
+    expression_toe = toe;
+    return 1;
+}
+
+static unsigned expression_value(unsigned raw)
+{
+    if (raw <= expression_heel) return 0;
+    if (raw >= expression_toe) return 255;
+    return (raw - expression_heel) * 255u / (expression_toe - expression_heel);
+}
+
 void gp50_expression_poll(void)
 {
     unsigned sample = (unsigned)gp5_adc_read(12);
-    if (sample > 4095u) return;
+    if (sample > GP50_EXPRESSION_MAX_RAW) return;
+    expression_raw = sample;
     if (!expression_sampled) {
-        expression_filtered = expression_last = sample;
+        expression_filtered_q4 = sample << 4;
+        expression_last = sample;
+        expression_reported = expression_value(sample);
         expression_sampled = 1;
         return;
     }
 
-    /* Stock analog filter and change thresholds (V1.0.5 0x4763c). */
-    expression_filtered = (sample + 3u * expression_filtered) >> 2;
-    unsigned delta = expression_filtered > expression_last ? expression_filtered - expression_last
-                                                            : expression_last - expression_filtered;
-    if (delta < 16u) { expression_pending = 0; return; }
-    if (expression_pending++ < 21u && delta < 64u) return;
-    expression_last = expression_filtered;
+    /* V1.0.5 0x4763c uses a 1/4 EMA. Extra fraction bits let a stable heel
+     * or toe settle exactly, and reaching a stop completes the sweep. */
+    expression_filtered_q4 = ((sample << 4) + 3u * expression_filtered_q4) >> 2;
+    unsigned filtered = (expression_filtered_q4 + 8u) >> 4;
+    unsigned delta = filtered > expression_last ? filtered - expression_last : expression_last - filtered;
+    int reached_stop = (filtered <= expression_heel && expression_reported != 0u)
+                    || (filtered >= expression_toe && expression_reported != 255u);
+    if (!expression_remap && !reached_stop) {
+        if (delta < 16u) { expression_pending = 0; return; }
+        if (expression_pending++ < 21u && delta < 64u) return;
+    }
+    expression_last = filtered;
     expression_pending = 0;
-    fw_gp50_expression(expression_last >> 4);
+    expression_remap = 0;
+    unsigned value = expression_value(expression_last);
+    if (value != expression_reported) {
+        expression_reported = value;
+        fw_gp50_expression(value);
+    }
 }

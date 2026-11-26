@@ -17,6 +17,7 @@ run "log"                             sh -c "$CC -I platform/nds32/test/include 
 run "printf (gp5_fmt)"                sh -c "$CC -I platform/dsp platform/dsp/test/fmt_test.c -o $T/fmt && $T/fmt"
 run "parameters and presets"          platform/nds32/test/params_test.sh
 run "UI kit"                          platform/nds32/test/ui_test.sh
+run "GP-50 expression range"           sh -c "$CC -Wno-int-to-pointer-cast -DGP50_BOARD=1 -I platform/nds32 -I platform/dsp platform/nds32/gp50_controls.c platform/nds32/test/gp50_expression_test.c -o $T/expression && $T/expression"
 run "manifest"                        python3 tools/test_manifest.py
 run "gp5tool"                         python3 tools/test_gp5tool.py
 run "J7 nudge (simulated DSP)"        python3 tools/test_j7_nudge.py

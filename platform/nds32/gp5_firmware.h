@@ -61,6 +61,10 @@ int fw_param_get(uint32_t id, uint32_t *value);
 int fw_param_set(uint32_t id, uint32_t value);
 
 /* ---- provided by the platform (1.0) ---- */
+#ifdef GP50_BOARD
+int gp50_expression_read_raw(unsigned *value);                  /* 1 if a physical ADC sample is available */
+int gp50_expression_set_range(unsigned heel, unsigned toe);    /* effective ADC bounds, in RAM only */
+#endif
 unsigned gp5_knob(void);                  /* the volume knob, 0..255 (filtered) */
 void gp5_level_own(int own);              /* 1: the firmware sets the output level (gp5_level_set); 0 (the default):
                                              the volume knob is the output level */

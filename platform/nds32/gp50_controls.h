@@ -5,6 +5,14 @@
 #define GP50_PARA_PIN (1u << 15)          /* port A */
 #define GP50_FS1_BIT (1u << 14)           /* shift input */
 
+#define GP50_EXPRESSION_MAX_RAW 4095u
+#define GP50_EXPRESSION_DEFAULT_TOE 200u
+
+static inline int gp50_expression_range_valid(unsigned heel, unsigned toe)
+{
+    return heel <= toe && toe <= GP50_EXPRESSION_MAX_RAW && toe - heel >= 51u;
+}
+
 void gp50_controls_init(void);
 void gp50_controls_sample(void);
 void gp50_controls_dispatch(void);

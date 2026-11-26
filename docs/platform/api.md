@@ -102,6 +102,8 @@ A blocked loop turns the LEDs full red after two seconds. See [Performance](perf
 | Call | Result or action |
 |---|---|
 | `gp5_knob()` | the volume knob, 0..255, filtered |
+| `gp50_expression_read_raw(&value)` | the last valid GP-50 ADC sample, 0..4095. Returns 0 before a sample or in the scripted simulator |
+| `gp50_expression_set_range(heel, toe)` | set effective raw bounds in RAM. Returns 1 for a span of at least 51 counts within 0..4095 |
 | `gp5_ms()` | milliseconds since start |
 | `GP5_CYCLE_COUNT()` | the core's cycle counter, for timing code ([performance](performance.md)) |
 | `gp5_level_own(1)`, `gp5_level_set(0..255)` | take over the output level (by default the volume knob sets it) |
