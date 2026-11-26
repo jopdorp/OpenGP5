@@ -62,6 +62,14 @@ int fw_param_set(uint32_t id, uint32_t value);
 
 /* ---- provided by the platform (1.0) ---- */
 #ifdef GP50_BOARD
+#define GP50_HAS_STATUS 1
+enum { GP50_BT_OFF, GP50_BT_UNPAIRED, GP50_BT_PAIRED };
+typedef struct {
+    int battery;                    /* 0–4 bars, or -1 before the first sample */
+    int charging;                   /* 0 or 1, or -1 before the first sample */
+    unsigned bluetooth;             /* radio off, searching, or a live classic/BLE link */
+} gp50_status_t;
+gp50_status_t gp50_status(void);    /* cached readings, no ADC wait */
 int gp50_expression_read_raw(unsigned *value);                  /* 1 if a physical ADC sample is available */
 int gp50_expression_set_range(unsigned heel, unsigned toe);    /* effective ADC bounds, in RAM only */
 #endif

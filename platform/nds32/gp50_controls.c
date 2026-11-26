@@ -8,6 +8,7 @@
 #define DATA_OUT GP5_PIN(28)
 #define DATA_IN GP5_PIN(4)
 #define CLOCK GP5_PIN(5)
+#define CHARGE_INPUT (1u << 10)
 #define PARA_ENCODER (GP5_PIN(2) | GP5_PIN(3))
 
 /* V1.0.5 cold start with empty retained flags. */
@@ -25,6 +26,7 @@ static uint32_t quiet[sizeof button_bits];
 static uint16_t buttons;
 static uint16_t control_output = COLD_OUTPUT;
 uint16_t gp50_control_input;
+static gp50_status_t status = { -1, -1, GP50_BT_OFF };
 static unsigned expression_raw, expression_filtered_q4, expression_last, expression_pending;
 static unsigned expression_heel, expression_toe = GP50_EXPRESSION_DEFAULT_TOE, expression_reported;
 static int expression_sampled, expression_remap;
@@ -122,13 +124,49 @@ void gp50_controls_dispatch(void)
     }
 }
 
-void gp50_expression_init(void)
+void gp50_analog_init(void)
 {
-    if (!fw_gp50_expression) return;
-    /* V1.0.5 uses ADC12 on A31 for the expression input. COLD_OUTPUT already
-     * holds shift bit 6 low, selecting stock ADC slot 0. */
-    gp5_reg_bits_set(GP5_GPIO_A_ANA_EN, GP5_PIN(31));
+    /* V1.0.5 0x47580: voltage ADC10/A29 and current ADC11/A30.
+     * Shift bit 6 already selects expression ADC12/A31 when used. */
+    uint32_t pins = GP5_PIN(29) | GP5_PIN(30);
+    if (fw_gp50_expression) pins |= GP5_PIN(31);
+    gp5_reg_bits_set(GP5_GPIO_A_ANA_EN, pins);
     gp5_adc_init();
+}
+
+gp50_status_t gp50_status(void) { return status; }
+
+void gp50_power_poll(void)
+{
+    static uint32_t next;
+    static unsigned charge_changes;
+    uint32_t now = gp5_ms();
+    if ((int32_t)(now - next) < 0) return;
+    next = now + 100;
+
+    /* V1.0.5 0x14784: the active-low charger input debounces independently of the ADC. */
+    int charge = !(gp50_control_input & CHARGE_INPUT);
+    if (charge == status.charging) charge_changes = 0;
+    else if (status.charging < 0 || ++charge_changes == 6) {
+        status.charging = charge;
+        charge_changes = 0;
+    }
+
+    int voltage = gp5_adc_read(10);
+    int current = gp5_adc_read(11);
+    if ((unsigned)voltage > 4095u || (unsigned)current > 4095u) return;
+
+    /* V1.0.5 0x14640 and 0x14950: compensate for current before applying hysteresis. */
+    static const unsigned rising[] = { 3630, 3680, 3812, 3956 };
+    static const unsigned falling[] = { 3615, 3665, 3797, 3928 };
+    int current_ua = current * 359 - 489000;
+    int adjusted_uv = voltage * 109022 / 100 - current_ua * 1563 / 5000;
+    int bars = 0;
+    for (unsigned i = 0; i < sizeof rising / sizeof rising[0]; ++i)
+        bars += current_ua > 0 ? adjusted_uv > (int)rising[i] * 1000 :
+                                adjusted_uv >= (int)falling[i] * 1000;
+    if (status.battery < 0 || (current_ua > 0 ? bars > status.battery : bars < status.battery))
+        status.battery = bars;
 }
 
 int gp50_expression_read_raw(unsigned *value)

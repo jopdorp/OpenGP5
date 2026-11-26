@@ -545,6 +545,8 @@ def gp50_app_handoff():
 set $pc = $lp
 set configured = 1
 set {{unsigned int}} 0x40005024 = 5
+# The flat MMIO model keeps the ADC calibration/conversion done bit set.
+set {{unsigned int}} 0x4002800c = 3
 set $acks = 0
 break *gp5_usb_setup
 commands

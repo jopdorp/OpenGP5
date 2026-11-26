@@ -894,6 +894,7 @@ static void monitor(void)
         /* volume knob every 10 ms; start-up sync, then knob changes, to the DSP */
         if ((int32_t)(gp5_ms() - knob_next) >= 0) {
 #ifdef GP50_BOARD
+            gp50_power_poll();
             gp50_expression_poll();
             knob = knob_value();
             knob_next = gp5_ms() + 10;
@@ -1081,7 +1082,7 @@ int main(void)
     usb_midi_init();                             /* attaches to the host (D+ pull-up) */
     dsp_link_init();
 #ifdef GP50_BOARD
-    gp50_expression_init();
+    gp50_analog_init();
 #else
     knob_init();
 #endif

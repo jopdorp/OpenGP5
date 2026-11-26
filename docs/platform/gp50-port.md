@@ -51,7 +51,12 @@ switches the expression ADC between its first two readings.
 The EXP/FS jack shares an input with the optional external footswitches.
 In EXP mode, the V1.0.5 event task at `0x49370` processes only logical ADC
 slot 0, selector 12 with shift output bit 6 low. The other channel-12 slot is
-used in Dual FS mode. Selectors 11 and 10 serve voltage and power functions.
+used in Dual FS mode. ADC10 on A29 measures battery voltage, and ADC11 on
+A30 measures current. The power gauge compensates for current before applying
+the stock four-bar thresholds. Charging comes from active-low shift input bit
+10, which also works when external power comes from the DC jack. The emulator
+can supply battery and Bluetooth states. On the pedal, OpenGP5 reports Bluetooth
+Off until a wireless stack supplies live connection state.
 The stock app filters analog changes at `0x4763c` and maps the sampled range
 at `0x444a8`. The factory calibration screen collects heel and toe extrema
 and rejects too little movement. Its saved endpoints are six raw counts above
