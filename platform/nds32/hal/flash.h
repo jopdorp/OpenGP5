@@ -10,7 +10,7 @@
  * (docs/platform/storage.md): FILES run A (0x13F000 .. 0x15FFFF, gp5_files.c), the STORE (two 4 KB sectors at
  * 0x160000, gp5_store.c) and FILES run B (0x162000 .. 0x189FFF). Every other address is refused, so the factory loader (0x0 .. 0xFFFF), the app and Valeton's data are out of reach. The flash commands run from RAM with interrupts off (the app itself runs from this flash); an
  * erase holds the processor for up to a few hundred ms, a 256-byte page for about 1 ms.
- * GP-50 storage uses a reservation inside the stock app span. Its physical flash driver is disabled. */
+ * GP-50 writes are limited to the journal inside the stock app span. */
 #define GP5_FLASH_STORE_SIZE 0x2000u
 #ifdef GP50_BOARD
 #define GP5_FLASH_STORE      0x163000u

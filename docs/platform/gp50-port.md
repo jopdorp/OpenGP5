@@ -270,3 +270,10 @@ The stock DSP references asset metadata at flash offsets
 shared user IR and SnapTone bank at `0x158000..0x1cffff`. A full backup
 requires hardware readout of both processors' flash. The GP-50 probe pinout
 still needs confirmation.
+
+The controller-side OpenGP5 store uses two sectors at
+`0x163000..0x164fff`, inside the replaceable stock program span. The
+linker and custom package checks keep OpenGP5 below that range. Its erase
+and program commands match the V1.0.5 control trace. A stock restore
+rewrites both sectors. Retention across custom firmware updates still
+needs a loader test.
