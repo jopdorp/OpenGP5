@@ -38,11 +38,13 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument("image")
     ap.add_argument("--set", action="append", default=[], metavar="ID=VALUE")
     ap.add_argument("--gp50-raw", action="store_true", help="read a raw GP-50 DSP section")
-    ap.add_argument("--codec-nack", action="store_true", help="simulate a missing GP-50 codec")
+    codecs = ap.add_mutually_exclusive_group()
+    codecs.add_argument("--codec-nack", action="store_true", help="simulate both GP-50 codecs missing")
+    codecs.add_argument("--codec-26-nack", action="store_true", help="simulate NACKs from GP-50 wire address 0x26")
     a = ap.parse_args()
     image = Path(a.image).read_bytes()
-    if a.codec_nack and not a.gp50_raw:
-        ap.error("--codec-nack requires --gp50-raw")
+    if (a.codec_nack or a.codec_26_nack) and not a.gp50_raw:
+        ap.error("codec NACK fixtures require --gp50-raw")
     if a.gp50_raw:
         if len(image) != 0xB874 or image[8:12] != b"V105" or gp5tool.check_dsp(image):
             ap.error("expected a raw GP-50 DSP section")
@@ -71,7 +73,8 @@ def main():
         elif addr == ADMA + 0x00: mu.mem_write(addr, struct.pack("<I", 1))
         elif addr == ADMA + 0x04: mu.mem_write(addr, struct.pack("<I", 0xF))
         elif a.gp50_raw and addr == CODEC_IN:
-            mu.mem_write(addr, struct.pack("<I", SDA if a.codec_nack else 0))
+            nack = a.codec_nack or (a.codec_26_nack and codec_message and codec_message[0] == 0x26)
+            mu.mem_write(addr, struct.pack("<I", SDA if nack else 0))
 
     def wr(mu, acc, addr, size, val, _):
         nonlocal codec_pins, codec_message, codec_bits, codec_value
@@ -136,7 +139,11 @@ def main():
     else:
         if a.gp50_raw:
             check("selects the internal GP-50 audio clock", (reg(0x4000E020) & 0xE) == 0xA)
-            check("configures both codecs", codec_frames == CODEC_WRITES.split(), " ".join(codec_frames))
+            if a.codec_26_nack:
+                check("configures the responding codec", codec_frames == ["26"] * 9 + ["101310"],
+                      " ".join(codec_frames))
+            else:
+                check("configures both codecs", codec_frames == CODEC_WRITES.split(), " ".join(codec_frames))
             check("routes all four DMA channels to GP-50 FIFOs",
                   [reg(ADMA + offset) for offset in (0x148, 0x168, 0x10C, 0x12C)] ==
                   [0x5000000C, 0x50000010, 0x50000014, 0x50000018])

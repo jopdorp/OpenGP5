@@ -82,7 +82,7 @@ static int codec_byte(uint8_t value)
 
 static unsigned gp50_codec_nacks;
 
-static unsigned gp50_codecs_init(void)
+static int gp50_codecs_init(void)
 {
     static const uint8_t writes[][3] = {
         {0x26, 0x00, 0x01}, {0x26, 0x06, 0x00}, {0x26, 0x05, 0x1b},
@@ -113,5 +113,7 @@ static unsigned gp50_codecs_init(void)
         CODEC_SET = CODEC_SDA;
         if (!ok) nacks |= 1u << i;
     }
-    return nacks;
+    gp50_codec_nacks = nacks;
+    /* Stock runs audio when the 0x26 device is absent and 0x10 responds. */
+    return nacks != (1u << (sizeof writes / sizeof writes[0])) - 1u;
 }

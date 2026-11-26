@@ -352,8 +352,7 @@ void resp_main(void) {
     ST[13] = 0;
     ST[17] = 0;
     ST[18] = 0;
-    gp50_codec_nacks = gp50_codecs_init();
-    int codecs_ready = !gp50_codec_nacks;
+    int codecs_ready = gp50_codecs_init();
     if (codecs_ready) audio_init();
 #else
 #ifdef AUDIO_SPI1
