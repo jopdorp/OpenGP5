@@ -192,6 +192,27 @@ checksums. The two sections contain OpenGP5 code. The build runs offline.
 The stock updater's acceptance of this package, re-entry from the custom
 control app, and cold recovery still need testing on the pedal.
 
+On Linux, check the experimental build and the official V1.0.5 recovery image
+before connecting to the factory loader.
+
+```sh
+python3 tools/gp50_flash.py check build/GP-50_tremolo-experimental.bin
+python3 tools/gp50_flash.py check-stock "GP-50 Firmware V1.0.5.zip"
+python3 tools/gp50_flash.py status
+```
+
+`status` requires an already running factory loader at USB `84ef:018b`
+and checks its update-mode reply. The installer uses the 19-byte MIDI data
+frames and section order from [Valeton Suite V1.0.9](https://www.valeton.net/wpfd_file/valeton-suite-setup-v1-0-9-for-mac-zip/).
+`flash` verifies the supplied stock recovery file before opening USB MIDI.
+Both `flash` and `restore` write the DSP and control program sections only.
+The tool stops if an erase or write acknowledgement is missing.
+
+```sh
+python3 tools/gp50_flash.py flash build/GP-50_tremolo-experimental.bin --stock "GP-50 Firmware V1.0.5.zip"
+python3 tools/gp50_flash.py restore "GP-50 Firmware V1.0.5.zip"
+```
+
 ### Processor link and USB
 
 A separate register-level replay used the two compiled GP-50 tremolo binaries.
