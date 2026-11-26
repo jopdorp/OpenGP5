@@ -50,21 +50,30 @@ static void gp50_dsp_clock(void)
     REG(0x4000E00Cu) = 0x0001FC3Fu;
 }
 
+static void __attribute__((noinline)) codec_delay(unsigned ticks)
+{
+    /* V1.0.5 bit-bang delay at 0x7968. */
+    __asm volatile("b 2f\n1: nop\n2: subs %0, %0, #1\n uxth %0, %0\n bcs 1b"
+                   : "+l"(ticks) :: "cc", "memory");
+}
+
 static int codec_byte(uint8_t value)
 {
     for (unsigned bit = 0; bit < 8; ++bit) {
+        codec_delay(120);
         if (value & 0x80u) CODEC_SET = CODEC_SDA;
         else CODEC_CLR = CODEC_SDA;
         value <<= 1;
-        gp50_delay(240);
+        codec_delay(120);
         CODEC_SET = CODEC_SCL;
-        gp50_delay(480);
+        codec_delay(480);
         CODEC_CLR = CODEC_SCL;
     }
+    codec_delay(480);
     CODEC_OE &= ~CODEC_SDA;
-    gp50_delay(240);
+    __asm volatile("dsb" ::: "memory");
     CODEC_SET = CODEC_SCL;
-    gp50_delay(480);
+    codec_delay(480);
     int ack = !(CODEC_IN & CODEC_SDA);
     CODEC_CLR = CODEC_SCL;
     CODEC_OE |= CODEC_SDA;
@@ -79,20 +88,28 @@ static int gp50_codecs_init(void)
         {0x26, 0x0d, 0xa0}, {0x26, 0x08, 0x11}, {0x26, 0x05, 0x13},
         {0x10, 0x13, 0x10},
     };
-    CODEC_SET = CODEC_SCL | CODEC_SDA;
-    CODEC_OE |= CODEC_SCL | CODEC_SDA;
+    CODEC_OE |= CODEC_SCL;
+    CODEC_OE |= CODEC_SDA;
+    CODEC_SET = CODEC_SCL;
+    codec_delay(480);
+    CODEC_SET = CODEC_SDA;
+    int ready = 1;
     for (unsigned i = 0; i < sizeof writes / sizeof writes[0]; ++i) {
+        CODEC_SET = CODEC_SCL;
+        codec_delay(120);
+        CODEC_SET = CODEC_SDA;
+        codec_delay(480);
         CODEC_CLR = CODEC_SDA;
-        gp50_delay(480);
+        codec_delay(480);
         CODEC_CLR = CODEC_SCL;
         int ok = codec_byte(writes[i][0]) && codec_byte(writes[i][1]) && codec_byte(writes[i][2]);
+        codec_delay(120);
         CODEC_CLR = CODEC_SDA;
-        gp50_delay(240);
+        codec_delay(240);
         CODEC_SET = CODEC_SCL;
-        gp50_delay(480);
+        codec_delay(480);
         CODEC_SET = CODEC_SDA;
-        gp50_delay(480);
-        if (!ok) return 0;
+        ready &= ok;
     }
-    return 1;
+    return ready;
 }
