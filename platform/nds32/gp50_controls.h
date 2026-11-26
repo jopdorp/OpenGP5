@@ -11,10 +11,10 @@ void gp50_controls_dispatch(void);
 void gp50_controls_prepare_update(void);
 extern uint16_t gp50_control_input;
 
-/* V1.0.5 0x14f22 dispatches on the transition to both phases low. */
+/* Count a detent on the transition to both phases low. Clockwise increases. */
 static inline int gp50_encoder_delta(unsigned previous, unsigned ab)
 {
-    return ab == 0 ? (previous == 1) - (previous == 2) : 0;
+    return ab == 0 ? (previous == 2) - (previous == 1) : 0;
 }
 
 #endif
