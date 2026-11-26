@@ -83,6 +83,14 @@ configuring DMA. The DSP trace captures those transfers with modeled ACKs.
 Codec identity, physical memory geometry and the DSP resident updater still
 need validation on the board.
 
+The first LiveWDF build that reached the physical DSP used the same DMA
+channels, requests and FIFO addresses as stock. The codec transactions had
+the same data bytes with different timing. In a forced-NACK test, stock
+continued to configure audio DMA and OpenGP5 left audio disabled. With clock
+select register `0x4000e020` seeded at `0x00080404`, stock reached
+`0x0000000a` and OpenGP5 retained `0x0008040e`. The initial state on the
+physical pedal still needs a readout.
+
 ## Run the checks
 
 Use the two official stock update ZIPs or their BIN files, the Andes tools
@@ -179,7 +187,7 @@ python3 tools/simulate.py tremolo --gp50 --script controls.txt
 The build starts with the stock cold control output and enables the Run
 outputs before querying the DSP. After flashing this change, the GP-50
 answered the DSP version and load queries over USB. The cycle counters
-were zero during the check. Analog playback still needs a hardware test.
+were zero during the check, and the guitar output was silent.
 
 ### Experimental update package
 
