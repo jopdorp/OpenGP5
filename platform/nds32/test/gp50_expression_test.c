@@ -2,6 +2,7 @@
 #include "gp5_firmware.h"
 #include "hal/adc.h"
 #include "hal/gpio.h"
+#include "hal/tick.h"
 #include <assert.h>
 
 static int32_t adc;
@@ -11,6 +12,7 @@ void fw_gp50_expression(unsigned next) { value = next; ++changes; }
 void fw_gp50_encoder_turn(unsigned encoder, int detents) { (void)encoder; (void)detents; }
 void fw_gp50_button(unsigned button, int down) { (void)button; (void)down; }
 uint32_t gp5_ms(void) { return 0; }
+void gp5_delay_ms(uint32_t ms) { (void)ms; assert(0); }
 int gp5_gpio_a_digital(unsigned pin) { (void)pin; return 0; }
 int gp5_gpio_b_digital(unsigned pin) { (void)pin; return 0; }
 void gp5_adc_init(void) { assert(0); }

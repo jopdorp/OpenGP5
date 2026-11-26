@@ -674,7 +674,6 @@ __attribute__((weak)) void fw_para_turn(int detents) { (void)detents; }
 #ifdef GP50_BOARD
 __attribute__((weak)) void fw_gp50_encoder_turn(unsigned encoder, int detents) { (void)encoder; (void)detents; }
 __attribute__((weak)) void fw_gp50_button(unsigned button, int down) { (void)button; (void)down; }
-__attribute__((weak)) void fw_gp50_expression(unsigned value) { (void)value; }
 #endif
 __attribute__((weak)) void fw_storage_changed(void) {}
 __attribute__((weak)) void fw_dsp_ready(void) {}

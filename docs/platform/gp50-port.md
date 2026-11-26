@@ -58,8 +58,8 @@ and rejects too little movement. Its saved endpoints are six raw counts above
 the heel and sixteen below the toe, with a minimum effective span of 51.
 [Valeton GP-50 V1.0.5 manual](https://www.valeton.net/download/312/online-manual/22311/gp-50_online-manual_en_firmware-v1-0-5-pdf.pdf)
 
-The emulator build samples selector 12 every 10 ms and reports changes
-through `fw_gp50_expression(0..255)`. The first reading establishes a
+When firmware defines `fw_gp50_expression`, the GP-50 samples selector 12
+every 10 ms and reports changes from 0 to 255. The first reading establishes a
 baseline. The default raw range is 0..200, as in the stock factory settings.
 An application can read the latest ADC sample and set effective heel and toe
 bounds in RAM using the [firmware API](api.md). The physical jack, pedal travel

@@ -28,6 +28,7 @@ uint16_t gp50_control_input;
 static unsigned expression_raw, expression_filtered_q4, expression_last, expression_pending;
 static unsigned expression_heel, expression_toe = GP50_EXPRESSION_DEFAULT_TOE, expression_reported;
 static int expression_sampled, expression_remap;
+extern void fw_gp50_expression(unsigned value) __attribute__((weak));
 
 /* V1.0.5 0x4851e. Shift the high output byte first and receive the low input
  * byte first. The duplicate writes retain the stock latch and clock timing. */
@@ -123,6 +124,7 @@ void gp50_controls_dispatch(void)
 
 void gp50_expression_init(void)
 {
+    if (!fw_gp50_expression) return;
     /* V1.0.5 uses ADC12 on A31 for the expression input. COLD_OUTPUT already
      * holds shift bit 6 low, selecting stock ADC slot 0. */
     gp5_reg_bits_set(GP5_GPIO_A_ANA_EN, GP5_PIN(31));
@@ -154,6 +156,7 @@ static unsigned expression_value(unsigned raw)
 
 void gp50_expression_poll(void)
 {
+    if (!fw_gp50_expression) return;
     unsigned sample = (unsigned)gp5_adc_read(12);
     if (sample > GP50_EXPRESSION_MAX_RAW) return;
     expression_raw = sample;
