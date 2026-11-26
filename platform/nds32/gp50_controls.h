@@ -8,6 +8,7 @@
 void gp50_controls_init(void);
 void gp50_controls_sample(void);
 void gp50_controls_dispatch(void);
+void gp50_controls_prepare_update(void);
 extern uint16_t gp50_control_input;
 
 /* V1.0.5 0x14f22 dispatches on the transition to both phases low. */

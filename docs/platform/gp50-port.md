@@ -213,6 +213,19 @@ python3 tools/gp50_flash.py flash build/GP-50_tremolo-experimental.bin --stock "
 python3 tools/gp50_flash.py restore "GP-50 Firmware V1.0.5.zip"
 ```
 
+The Andes simulator can replay the custom app's warm handoff.
+
+```sh
+platform/build_firmware.sh --gp50-emu tremolo
+python3 tools/stock_control_emu.py --gp50-app build/GP-50_tremolo/control.elf --gp50-warm-handoff
+```
+
+The fixture checks that the app stays running if the host fails to receive
+the update acknowledgment. Once the host takes it, the app follows the stock
+GP-50 sequence of two control output updates, two settle delays and a direct
+handoff to the resident loader at address zero. The simulator stops at the
+loader entry. The official update does not include the loader.
+
 ### Processor link and USB
 
 A separate register-level replay used the two compiled GP-50 tremolo binaries.

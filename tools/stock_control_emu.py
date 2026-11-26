@@ -518,7 +518,104 @@ def open_app(andes, elf):
     ], ["tlb", "main"])
 
 
-def gp50_app(andes, elf):
+def midi_events(payload):
+    wire = build_sysex(CLASS_CMD, 0, payload)
+    events = bytearray()
+    for offset in range(0, len(wire), 3):
+        data = wire[offset:offset + 3]
+        events.append(4 + len(data) if offset + 3 >= len(wire) else 4)
+        events.extend(data.ljust(3, b"\0"))
+    return events
+
+
+def gp50_app_handoff():
+    request = midi_events(b"\x11\x6f")
+    ack = midi_events(b"\x14\x08\x00")
+    inject = "\n".join(
+        f"  set {{unsigned int}} ($r0 + {i}) = {int.from_bytes(request[i:i + 4], 'little'):#x}"
+        for i in range(0, len(request), 4)
+    )
+    expect_ack = " && ".join(
+        f"*(unsigned int *)($r1 + {i}) == {int.from_bytes(ack[i:i + 4], 'little'):#x}"
+        for i in range(0, len(ack), 4)
+    )
+    # Replay through the app and bulk IN driver. One ACK times out, a retry
+    # finds its packet pending, then the host drains it and takes a fresh ACK.
+    return rf"""
+set $pc = $lp
+set configured = 1
+set {{unsigned int}} 0x40005024 = 5
+set $acks = 0
+break *gp5_usb_setup
+commands
+  silent
+  set $r0 = 2
+  set $pc = $lp
+  continue
+end
+break *dsp_link_version
+commands
+  silent
+  set $r0 = 0
+  set $pc = $lp
+  continue
+end
+break *usb_midi_read
+commands
+  silent
+  if $acks == 2
+    set {{unsigned short}} 0x40000312 = 0x2000
+  end
+{inject}
+  set $r0 = {len(request)}
+  set $pc = $lp
+  continue
+end
+break *gp5_usb_bulk_send
+commands
+  silent
+  set $acks = $acks + 1
+  printf "UPDATE ack %d %d\n", $acks, $r0 == 0x82 && $r2 == {len(ack)} && {expect_ack}
+  continue
+end
+break *gp5_timeout_late
+commands
+  silent
+  printf "UPDATE pending %d %d\n", $acks, (*(unsigned char *)0x40000312 & 1) == 1
+  set $r0 = $acks != 3
+  if $acks == 3
+    set {{unsigned short}} 0x40000312 = 0x2000
+  end
+  set $pc = $lp
+  continue
+end
+break *gp50_controls_prepare_update
+commands
+  silent
+  printf "UPDATE prepare %d\n", $acks == 3
+  set {{unsigned int}} 0x4000100c = 0x100
+  set {{unsigned int}} 0x4000d0e0 = 0xffffffff
+  set {{unsigned int}} 0x4000d100 = 0xffffffff
+  set {{unsigned int}} 0x40020010 = 0xb
+  continue
+end
+break *gp5_delay_ms
+commands
+  silent
+  printf "UPDATE wait %d\n", $r0
+  set $pc = $lp
+  continue
+end
+tbreak *0
+continue
+set $power = *(unsigned int *)0x4000100c == 0x122 && *(unsigned int *)0x40022008 == 0
+set $dma = *(unsigned int *)0x4000d0e0 == 0 && *(unsigned int *)0x4000d100 == 0
+set $watchdog = *(unsigned int *)0x40020010 == 3 && *(unsigned int *)0x40020000 == 1
+printf "UPDATE jump %d\n", $pc == 0 && $power && $dma && $watchdog
+"""
+
+
+def gp50_app(andes, elf, warm_handoff=False):
     tlb = open_elf_tlb(andes, elf, gp50=True)
     # The simulator needs oscillator/eFuse/PLL readiness from the board.
     # SPI is intercepted so the display sees transfers without a modeled FIFO.
@@ -563,6 +660,8 @@ set $b_outputs = *(unsigned int *)0x40010048 & 0x60
 set $backlight = (*(unsigned int *)0x400100f4 & 0xf) == 0xa && *(unsigned int *)0x4002f024 == 3999
 printf "BOARD %d\n", $pc == (unsigned int)&usb_midi_init && gp5_stage == 8 && $a_outputs == 0x11030080 && $b_outputs == 0x60 && $backlight && gp50_control_input == 0xffff
 """
+    if warm_handoff:
+        script += gp50_app_handoff()
     with TemporaryDirectory() as directory:
         path = Path(directory) / "startup.gdb"
         path.write_text(script)
@@ -588,6 +687,12 @@ printf "BOARD %d\n", $pc == (unsigned int)&usb_midi_init && gp5_stage == 8 && $a
     if "BOARD 1" not in trace or delays[:6] != [1, 1, 130, 120, 10, 100]:
         raise ValueError("unexpected board registers or panel reset timings")
     print("GP-50 reached USB initialization with the 160×128 panel, startup logo and backlight")
+    if warm_handoff:
+        actual = [line[7:] for line in trace if line.startswith("UPDATE ")]
+        if actual != ["ack 1 1", "pending 1 1", "ack 2 1", "ack 3 1", "pending 3 1",
+                      "prepare 1", "wait 100", "wait 100", "jump 1"]:
+            raise ValueError(f"unexpected warm handoff: {actual}")
+        print("GP-50 reached the loader entry after the USB ACK and two board settle delays")
 
 
 def main():
@@ -599,21 +704,21 @@ def main():
     parser.add_argument("--andes-bin", type=Path, default=ANDES)
     stock_mode = parser.add_mutually_exclusive_group()
     stock_mode.add_argument("--gp50-warm-handoff", action="store_true",
-                            help="replay the stock GP-50 update-mode request up to the factory-loader jump")
+                            help="replay the GP-50 update-mode request up to the factory-loader jump")
     stock_mode.add_argument("--stock-radio", action="store_true",
                             help="continue stock startup through modeled settings flash and Bluetooth radio setup")
     stock_mode.add_argument("--stock-cold", action="store_true",
                             help="run stock startup through the LCD using stock DSP UART replies")
     args = parser.parse_args()
-    if args.gp50_warm_handoff and not args.stock:
-        parser.error("--gp50-warm-handoff requires --stock")
+    if args.gp50_warm_handoff and not (args.stock or args.gp50_app):
+        parser.error("--gp50-warm-handoff requires --stock or --gp50-app")
     if (args.stock_radio or args.stock_cold) and not args.stock:
         parser.error("stock startup replay requires --stock")
     try:
         if args.stock:
             stock(args.andes_bin, args.stock, args.gp50_warm_handoff, args.stock_radio, args.stock_cold)
         elif args.gp50_app:
-            gp50_app(args.andes_bin, args.gp50_app)
+            gp50_app(args.andes_bin, args.gp50_app, args.gp50_warm_handoff)
         else:
             open_app(args.andes_bin, args.open_elf)
     except (OSError, ValueError, ImportError, subprocess.SubprocessError, zipfile.BadZipFile) as exc:
