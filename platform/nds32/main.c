@@ -583,7 +583,12 @@ static void host_dsp_cmd(void)
         uint32_t v[15], k;
         static const uint8_t reset_dsp[6] = { 8, 0, 1, 0, 0, 0 };   /* [len u16][1]: the payload's own length first */
         int reset = proto_req_len == 3 && proto_req[2] == 1;
-        unsigned got = dsp_link_query(0x7F04, reset ? reset_dsp : 0, reset ? 6u : 0u, rep, sizeof rep, 30);
+        const uint8_t *request = reset ? reset_dsp : 0;
+#ifdef GP50_BOARD
+        static const uint8_t audio_dsp[6] = { 8, 0, 2, 0, 0, 0 };
+        if (proto_req_len == 3 && proto_req[2] == 2) request = audio_dsp;
+#endif
+        unsigned got = dsp_link_query(0x7F04, request, request ? 6u : 0u, rep, sizeof rep, 30);
         loop_skip = 1;
         v[0] = GP5_CTL_MHZ * 1000000u / GP5_SAMPLE_RATE * 64u; v[1] = gp5_link_cycles; v[2] = gp5_link_worst; v[3] = loop_worst;
         v[4] = (uint32_t)((uintptr_t)_end - 0x20004000u); v[5] = 0x44000u - 0x20u;

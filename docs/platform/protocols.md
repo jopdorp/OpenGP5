@@ -92,6 +92,8 @@ The pedal replies to update frames with `14 08 00`. A non-zero third byte asks f
 | `7E 14 [1]` | `7E 14 1 <15 values, u32 each>` | load and memory (1.0). Control processor: cycles per block, audio-link handler last and worst, main loop's longest pass (cycles), RAM used, RAM total. DSP: answered (0/1), cycles per block, last block, worst, late blocks, variables used and total, `GP5_LARGE` used and total. With `1`: clear peak readings |
 | `7E 18 <from u32>` | `7E 18 1 <at u32> <end u32> <n> <n bytes>` | the log (1.0, `gp5_log`), from byte `from`. `at` = where the bytes start (the oldest kept, if `from` was overwritten), `end` = bytes written since start-up; ask again from `at + n` |
 
+On GP-50, `7E 14 02` returns the same load reply and adds one DSP audio status line to the log. The line reports a bit for each failed codec transaction in startup order, completed audio blocks since boot, and the raw and accumulated DMA completion flags. Read it with `7E 18`.
+
 `tools/gp5_link.py` wraps `7E 00`, `7E 01`, `7E 03` / `7E 04`, `7E 05` (`flash-read`) and the 1.0 commands
 (`info`, `params`, `set`, `presets`, `preset`, `log`, `status`). `tools/gp5tool.py info` reads `7E 16` too.
 

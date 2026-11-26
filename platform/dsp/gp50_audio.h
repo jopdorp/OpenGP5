@@ -80,7 +80,9 @@ static int codec_byte(uint8_t value)
     return ack;
 }
 
-static int gp50_codecs_init(void)
+static unsigned gp50_codec_nacks;
+
+static unsigned gp50_codecs_init(void)
 {
     static const uint8_t writes[][3] = {
         {0x26, 0x00, 0x01}, {0x26, 0x06, 0x00}, {0x26, 0x05, 0x1b},
@@ -93,7 +95,7 @@ static int gp50_codecs_init(void)
     CODEC_SET = CODEC_SCL;
     codec_delay(480);
     CODEC_SET = CODEC_SDA;
-    int ready = 1;
+    unsigned nacks = 0;
     for (unsigned i = 0; i < sizeof writes / sizeof writes[0]; ++i) {
         CODEC_SET = CODEC_SCL;
         codec_delay(120);
@@ -109,7 +111,7 @@ static int gp50_codecs_init(void)
         CODEC_SET = CODEC_SCL;
         codec_delay(480);
         CODEC_SET = CODEC_SDA;
-        ready &= ok;
+        if (!ok) nacks |= 1u << i;
     }
-    return ready;
+    return nacks;
 }

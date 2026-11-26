@@ -275,6 +275,11 @@ static void handle(const uint8_t *p, uint32_t n) {
         for (uint32_t i = 0; i < 20; i++) r[4 + i] = (uint8_t)(v[i / 4] >> (8 * (i % 4)));
         if (n >= 8 && get32(p + 4) == 1u) { ST[30] = 0; ST[31] = 0; }   /* [1]: start the worst and late counts again */
         send_frame(r, sizeof r);
+#if defined(GP50_BOARD) && defined(AUDIO_PASSTHROUGH)
+        if (n >= 8 && get32(p + 4) == 2u)
+            gp5_log("audio codec NACK=%03x blocks=%lu DMA raw=%08lx pending=%lx", gp50_codec_nacks,
+                    (unsigned long)ST[13], (unsigned long)REG(ADMA + 0x1C), (unsigned long)a_done);
+#endif
         break;
     }
 #endif
@@ -344,7 +349,11 @@ void resp_main(void) {
 
 #ifdef AUDIO_PASSTHROUGH
 #ifdef GP50_BOARD
-    int codecs_ready = gp50_codecs_init();
+    ST[13] = 0;
+    ST[17] = 0;
+    ST[18] = 0;
+    gp50_codec_nacks = gp50_codecs_init();
+    int codecs_ready = !gp50_codec_nacks;
     if (codecs_ready) audio_init();
 #else
 #ifdef AUDIO_SPI1
