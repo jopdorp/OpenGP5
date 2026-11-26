@@ -208,6 +208,10 @@ int gp5_usb_bulk_send(unsigned ep, const uint8_t *buf, int len, uint32_t ms)
     unsigned idx = ep & 0xFu, n;
 
     INDEX = (uint8_t)idx;
+#ifdef GP50_BOARD
+    /* A timed-out packet can still be in the FIFO. Wait for a later call after the host drains it. */
+    if (CSR8 & 0x3u) return GP5_USB_FAILED;
+#endif
     do {
         n = len < 0x41 ? (unsigned)len : 64u;
         fifo_write(idx, buf, n);

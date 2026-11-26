@@ -1,6 +1,7 @@
 #include "gp50_controls.h"
 #include "gp5_firmware.h"
 #include "hal/gpio.h"
+#include "hal/tick.h"
 
 #define LOAD GP5_PIN(17)
 #define DATA_OUT GP5_PIN(28)
@@ -24,14 +25,14 @@ uint16_t gp50_control_input;
 
 /* V1.0.5 0x4851e. Shift the high output byte first and receive the low input
  * byte first. The duplicate writes retain the stock latch and clock timing. */
-static uint16_t shift_controls(void)
+static uint16_t shift_controls(uint16_t output)
 {
     uint16_t in = 0;
     gp5_reg_bits_clear(GP5_GPIO_A_OUT, LOAD);
     gp5_reg_bits_clear(GP5_GPIO_A_OUT, LOAD);
     gp5_reg_bits_set(GP5_GPIO_A_OUT, LOAD);
     for (unsigned i = 0; i < 16; i++) {
-        if (COLD_OUTPUT & (0x8000u >> i)) gp5_reg_bits_set(GP5_GPIO_A_OUT, DATA_OUT);
+        if (output & (0x8000u >> i)) gp5_reg_bits_set(GP5_GPIO_A_OUT, DATA_OUT);
         else gp5_reg_bits_clear(GP5_GPIO_A_OUT, DATA_OUT);
         if (gp5_reg_get(GP5_GPIO_B_IN) & DATA_IN) in |= (0x80u >> (i & 7u)) << (i & 8u);
         gp5_reg_bits_set(GP5_GPIO_B_OUT, CLOCK);
@@ -65,18 +66,27 @@ void gp50_controls_init(void)
     gp5_reg_bits_set(GP5_GPIO_B_PU, CLOCK | DATA_IN);
     gp5_reg_bits_clear(GP5_GPIO_B_PU, PARA_ENCODER);
     gp5_reg_bits_clear(GP5_GPIO_B_PD, CLOCK | DATA_IN | PARA_ENCODER);
-    gp50_control_input = shift_controls();
+    gp50_control_input = shift_controls(COLD_OUTPUT);
     for (unsigned i = 0; i < sizeof encoder_bits; i++)
         encoders[i].ab = (gp50_control_input >> encoder_bits[i]) & 3u;
 }
 
 void gp50_controls_sample(void)
 {
-    gp50_control_input = shift_controls();
+    gp50_control_input = shift_controls(COLD_OUTPUT);
     for (unsigned i = 0; i < sizeof encoder_bits; i++) {
         unsigned ab = (gp50_control_input >> encoder_bits[i]) & 3u;
         encoders[i].detents += gp50_encoder_delta(encoders[i].ab, ab);
         encoders[i].ab = ab;
+    }
+}
+
+void gp50_controls_prepare_update(void)
+{
+    /* V1.0.5 clears and clocks out bit 1 twice, waiting 100 ticks after each. */
+    for (unsigned i = 0; i < 2; i++) {
+        shift_controls(COLD_OUTPUT & ~(1u << 1));
+        gp5_delay_ms(100);
     }
 }
 

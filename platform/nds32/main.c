@@ -825,7 +825,12 @@ static void monitor(void)
             int r;
             if (mbuf[i] & 0x0F) rx = ((uint32_t)mbuf[i + 1] << 16) | ((uint32_t)mbuf[i + 2] << 8) | mbuf[i + 3];
             r = proto_feed(mbuf + i);
-#ifndef GP50_BOARD
+#ifdef GP50_BOARD
+            if (r == PROTO_TO_LOADER) {
+                gp50_controls_prepare_update();
+                loader_handover();
+            }
+#else
             if (r == PROTO_TO_LOADER) {
                 put_line(4, "TO LOADER", yellow, black);
                 /* The DSP goes quiet first (its firmware's processing paused, plain passthrough): the loader talks

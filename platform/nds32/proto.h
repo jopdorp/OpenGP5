@@ -10,9 +10,9 @@
 #define PROTO_DSP         2     /* `7E xx` received: request payload in proto_req, the caller answers with proto_reply() */
 int proto_feed(const uint8_t *ev);
 
-/* Send one framed message to the host. */
+/* Send one framed message to the host. Returns true once the host took it. */
 #define PROTO_REPLY_MAX 100
-void proto_reply(uint8_t cls, uint8_t index, const uint8_t *pl, unsigned len);
+bool proto_reply(uint8_t cls, uint8_t index, const uint8_t *pl, unsigned len);
 
 void loader_handover(void);     /* does not return */
 
