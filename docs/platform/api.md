@@ -91,6 +91,7 @@ A blocked loop turns the LEDs full red after two seconds. See [Performance](perf
 | `void fw_para_click(void)` | a push let go within 0.6 s (just before `fw_para_up`) |
 | `void fw_para_hold(void)` | a push held 0.6 s (once, while still held; no click follows) |
 | `void fw_para_turn(int detents)` | PARA turned, + clockwise |
+| `void fw_gp50_expression(unsigned value)` | GP-50 expression input changed, normalized to 0..255 |
 | `void fw_param_changed(unsigned id)` | a parameter changed from outside: the computer, a preset load ([Parameters](params.md)) |
 | `int fw_param_text(unsigned id, int32_t v, char *text)` | the text of a `GP5_U_CUSTOM` value, up to 15 characters |
 | `void fw_storage_changed(void)` | the computer changed this firmware's files or records: read them again |

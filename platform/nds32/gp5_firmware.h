@@ -47,6 +47,7 @@ enum { GP50_ENCODER_LEFT, GP50_ENCODER_MIDDLE, GP50_ENCODER_RIGHT };
 enum { GP50_BUTTON_DRUM, GP50_BUTTON_EXIT, GP50_BUTTON_GLOBAL, GP50_BUTTON_SAVE, GP50_BUTTON_FS2 };
 void fw_gp50_encoder_turn(unsigned encoder, int detents);
 void fw_gp50_button(unsigned button, int down);
+void fw_gp50_expression(unsigned value);  /* EXP/FS jack in expression mode, 0..255 */
 #endif
 void fw_storage_changed(void);            /* the computer changed this firmware's files or store records: read them again */
 /* A firmware without params.h sends settings to the DSP through fw_take / fw_setting_count / fw_dsp_ready and gives

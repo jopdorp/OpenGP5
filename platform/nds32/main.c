@@ -668,6 +668,7 @@ __attribute__((weak)) void fw_para_turn(int detents) { (void)detents; }
 #ifdef GP50_BOARD
 __attribute__((weak)) void fw_gp50_encoder_turn(unsigned encoder, int detents) { (void)encoder; (void)detents; }
 __attribute__((weak)) void fw_gp50_button(unsigned button, int down) { (void)button; (void)down; }
+__attribute__((weak)) void fw_gp50_expression(unsigned value) { (void)value; }
 #endif
 __attribute__((weak)) void fw_storage_changed(void) {}
 __attribute__((weak)) void fw_dsp_ready(void) {}
@@ -874,6 +875,7 @@ static void monitor(void)
         /* volume knob every 10 ms; start-up sync, then knob changes, to the DSP */
         if ((int32_t)(gp5_ms() - knob_next) >= 0) {
 #ifdef GP50_BOARD
+            gp50_expression_poll();
             knob = knob_value();
             knob_next = gp5_ms() + 10;
             api_tick(knob);
@@ -1059,7 +1061,9 @@ int main(void)
     gp5_stage = 8;
     usb_midi_init();                             /* attaches to the host (D+ pull-up) */
     dsp_link_init();
-#ifndef GP50_BOARD
+#ifdef GP50_BOARD
+    gp50_expression_init();
+#else
     knob_init();
 #endif
     gp5_stage = 9;

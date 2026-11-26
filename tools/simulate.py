@@ -24,7 +24,7 @@ No pedal needed (docs/platform/simulator.md).
   --files DIR     the firmware's files (gp5_file): every file in DIR, by its name
   --check         build with the address and undefined-behaviour checkers: a crash or a bad memory access stops
                   with the line it happened on (slower)
-  --gp50          160 x 128 screen and extra inputs, e.g. "left turn 2", "save click", "fs2 down"
+  --gp50          160 x 128 screen and extra inputs, e.g. "left turn 2", "save click", "expression 128"
 The log (gp5_log on either processor) and the LEDs print as the run goes. The timing is the pedal's: 64-sample
 blocks, fw_tick every 10 ms, the PARA hold at 0.6 s, the audio link's words three blocks on. The arithmetic is the
 pedal's maths code compiled for the computer; cycle counts are not simulated (gp5_link.py status on the pedal).
@@ -90,6 +90,10 @@ def events(script, names, choices, shown, gp50=False):
             elif len(w) == 2 and w[1] in ("down", "up"):
                 out.append((t, f"button {button} {int(w[1] == 'down')}"))
             else: bad(f"{w[0]} click | down | up")
+        elif gp50 and w[:1] == ["expression"]:
+            if len(w) != 2 or not re.fullmatch(r"[0-9]{1,3}", w[1]) or int(w[1]) > 255:
+                bad("expression needs a value from 0 to 255")
+            out.append((t, f"expression {int(w[1])}"))
         elif w[:1] == ["knob"] and len(w) == 2 and w[1].isdigit(): out.append((t, f"knob {int(w[1])}"))
         elif w[:1] == ["set"] and len(w) == 3:
             k, v = line[2].upper(), line[3]
