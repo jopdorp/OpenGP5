@@ -9,6 +9,8 @@ void gp50_controls_init(void);
 void gp50_controls_sample(void);
 void gp50_controls_dispatch(void);
 void gp50_controls_prepare_update(void);
+void gp50_expression_init(void);
+void gp50_expression_poll(void);
 extern uint16_t gp50_control_input;
 
 /* Count a detent on the transition to both phases low. Clockwise increases. */

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks of the simulator (tools/simulate.py) on the tremolo: a script's controls, parameters, presets, saving
 between runs, LEDs, screens and sound. python3 tools/test_simulate.py (needs cc)"""
-import math, pathlib, subprocess, sys, tempfile, wave
+import math, pathlib, shutil, subprocess, sys, tempfile, wave
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 fails = 0
@@ -13,9 +13,9 @@ def check(ok, what):
     fails += not ok
 
 
-def run(d, name, script, *extra):
+def run(d, name, script, *extra, firmware="tremolo"):
     (d / f"{name}.txt").write_text(script)
-    r = subprocess.run([sys.executable, str(ROOT / "tools/simulate.py"), "tremolo", "--seconds", "2", "--script", str(d / f"{name}.txt"),
+    r = subprocess.run([sys.executable, str(ROOT / "tools/simulate.py"), firmware, "--seconds", "2", "--script", str(d / f"{name}.txt"),
                         "--out", str(d / f"{name}.wav"), "--shots", str(d / name), *extra], capture_output=True, text=True)
     if r.returncode: print(r.stdout, r.stderr)
     return r
@@ -59,5 +59,15 @@ with tempfile.TemporaryDirectory() as d:
     check(controls.returncode == parameters.returncode == 0 and
           (d / "gp50-controls.wav").read_bytes() == (d / "gp50-parameters.wav").read_bytes(),
           "GP-50 encoders and FS2 reach the DSP parameters")
+    expression_firmware = d / "expression-firmware"
+    shutil.copytree(ROOT / "firmwares/tremolo", expression_firmware)
+    with (expression_firmware / "nds32/firmware.c").open("a") as source:
+        source.write("\nvoid fw_gp50_expression(unsigned value) { gp5_param_set(GP5_P_DEPTH, value * 100 / 255); }\n")
+    expression = run(d, "gp50-expression", "0.2 expression 0\n0.4 expression 128\n0.6 expression 255\n",
+                     "--gp50", firmware=expression_firmware)
+    direct = run(d, "gp50-expression-parameters", "0.2 set Depth 0\n0.4 set Depth 50\n0.6 set Depth 100\n", "--gp50")
+    check(expression.returncode == direct.returncode == 0 and
+          (d / "gp50-expression.wav").read_bytes() == (d / "gp50-expression-parameters.wav").read_bytes(),
+          "GP-50 expression events reach the firmware callback at the heel, midpoint and toe")
 print("ALL OK" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

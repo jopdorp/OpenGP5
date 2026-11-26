@@ -1,5 +1,6 @@
 #include "gp50_controls.h"
 #include "gp5_firmware.h"
+#include "hal/adc.h"
 #include "hal/gpio.h"
 #include "hal/tick.h"
 
@@ -24,6 +25,8 @@ static uint32_t quiet[sizeof button_bits];
 static uint16_t buttons;
 static uint16_t control_output = COLD_OUTPUT;
 uint16_t gp50_control_input;
+static unsigned expression_filtered, expression_last, expression_pending;
+static int expression_sampled;
 
 /* V1.0.5 0x4851e. Shift the high output byte first and receive the low input
  * byte first. The duplicate writes retain the stock latch and clock timing. */
@@ -115,4 +118,33 @@ void gp50_controls_dispatch(void)
             fw_gp50_button(i, (buttons & mask) != 0);
         }
     }
+}
+
+void gp50_expression_init(void)
+{
+    /* V1.0.5 uses ADC12 on A31 for the expression input. COLD_OUTPUT already
+     * holds shift bit 6 low, selecting stock ADC slot 0. */
+    gp5_reg_bits_set(GP5_GPIO_A_ANA_EN, GP5_PIN(31));
+    gp5_adc_init();
+}
+
+void gp50_expression_poll(void)
+{
+    unsigned sample = (unsigned)gp5_adc_read(12);
+    if (sample > 4095u) return;
+    if (!expression_sampled) {
+        expression_filtered = expression_last = sample;
+        expression_sampled = 1;
+        return;
+    }
+
+    /* Stock analog filter and change thresholds (V1.0.5 0x4763c). */
+    expression_filtered = (sample + 3u * expression_filtered) >> 2;
+    unsigned delta = expression_filtered > expression_last ? expression_filtered - expression_last
+                                                            : expression_last - expression_filtered;
+    if (delta < 16u) { expression_pending = 0; return; }
+    if (expression_pending++ < 21u && delta < 64u) return;
+    expression_last = expression_filtered;
+    expression_pending = 0;
+    fw_gp50_expression(expression_last >> 4);
 }

@@ -53,6 +53,7 @@ __attribute__((weak)) void fw_para_turn(int detents) { (void)detents; }
 #ifdef GP50_BOARD
 __attribute__((weak)) void fw_gp50_encoder_turn(unsigned encoder, int detents) { (void)encoder; (void)detents; }
 __attribute__((weak)) void fw_gp50_button(unsigned button, int down) { (void)button; (void)down; }
+__attribute__((weak)) void fw_gp50_expression(unsigned value) { (void)value; }
 #endif
 __attribute__((weak)) void fw_storage_changed(void) {}
 __attribute__((weak)) void fw_dsp_ready(void) {}
@@ -288,6 +289,7 @@ int main(int argc, char **argv)
 #ifdef GP50_BOARD
             else if (!strcmp(next_op, "encoder")) fw_gp50_encoder_turn((unsigned)a1, (int)a2);
             else if (!strcmp(next_op, "button")) fw_gp50_button((unsigned)a1, (int)a2);
+            else if (!strcmp(next_op, "expression")) fw_gp50_expression((unsigned)a1);
 #endif
             else if (!strcmp(next_op, "knob")) knob = (unsigned)(a1 < 0 ? 0 : a1 > 255 ? 255 : a1);
 #ifdef GP5_HAS_PARAMS

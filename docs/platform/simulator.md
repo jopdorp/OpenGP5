@@ -46,6 +46,7 @@ One line per action, the time in seconds first:
 | `para click`, `para hold` | push PARA and let go after 0.1 s / 0.8 s (`para down` / `para up`: one edge) |
 | `para turn N` | turn PARA N clicks (negative: back) |
 | `knob N` | the volume knob, 0..255 |
+| `expression N` | GP-50 expression position, 0..255 (requires `--gp50`) |
 | `set NAME VALUE` | a parameter, as Launchpad sets it: by the name shown (`Loop_level` for "Loop level") or the code's (`LOOPLV`); a choice by its name |
 | `preset load N`, `preset save N` | presets, numbered from 1 as on the pedal |
 | `shot NAME` | the screen now, as `NAME.png` |
