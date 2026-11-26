@@ -177,8 +177,9 @@ python3 tools/simulate.py tremolo --gp50 --script controls.txt
 ```
 
 The build starts with the stock cold control output and enables the Run
-outputs before querying the DSP. The corrected sequence still needs a
-hardware DSP and audio test.
+outputs before querying the DSP. After flashing this change, the GP-50
+answered the DSP version and load queries over USB. The cycle counters
+were zero during the check. Analog playback still needs a hardware test.
 
 ### Experimental update package
 
