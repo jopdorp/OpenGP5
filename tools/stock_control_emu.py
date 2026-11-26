@@ -634,7 +634,11 @@ set {{unsigned int}} 0x40010030 = 0x10
 tbreak *gp5_delay_ms
 commands
   silent
-  printf "RUN settle %d\n", $r0 == 50 && control_output == 0x3f18
+  set $a22 = 1 << 22
+  set $a22_low = !(*(unsigned int *)0x40010004 & $a22)
+  set $a22_output = !(*(unsigned int *)0x40010014 & $a22) && (*(unsigned int *)0x40010018 & $a22)
+  set $a22_pull = (*(unsigned int *)0x40010020 & *(unsigned int *)0x40010024 & $a22) != 0
+  printf "RUN settle %d\n", $r0 == 50 && control_output == 0x3f18 && $a22_low && $a22_output && $a22_pull
   set $pc = $lp
   continue
 end

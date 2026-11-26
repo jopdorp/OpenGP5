@@ -88,7 +88,16 @@ static void out_pin(uint32_t mask)
 
 static void board_init(void)
 {
-#ifndef GP50_BOARD
+#ifdef GP50_BOARD
+    /* V1.0.5 board init drives A22 low before enabling the Run outputs. */
+    const uint32_t a22 = GP5_PIN(22);
+    gp5_gpio_a_digital(22);
+    gp5_reg_bits_clear(GP5_GPIO_A_OUT, a22);
+    gp5_reg_bits_clear(GP5_GPIO_A_IE, a22);
+    gp5_reg_bits_set(GP5_GPIO_A_PU, a22);
+    gp5_reg_bits_set(GP5_GPIO_A_PD, a22);
+    gp5_reg_bits_set(GP5_GPIO_A_OE, a22);
+#else
     /* 0x47d90: A24 then A22 as outputs; A22 high, A24 low */
     out_pin(GP5_PIN(24));
     out_pin(GP5_PIN(22));
