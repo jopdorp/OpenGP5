@@ -40,7 +40,8 @@ for f in "$APP/main.c" "$APP/led.c" "$APP/usb_midi.c" "$APP/proto.c" "$APP/dsp_l
   [ "$b" = flash.c ] && X=-fno-toplevel-reorder   # keeps its no-EX9 / no-IFC brackets around the code
   nds32le-elf-gcc $CF $X -I"$APP/start" -c "$f" -o "${b%.*}.o"
 done
-nds32le-elf-gcc -Os -nostartfiles -static -mcmodel=medium -mext-dsp -mvh -T "$APP/start/app.ld" -Wl,--gc-sections -Wl,-Map,app.map \
+nds32le-elf-gcc -E -P -x c -DGP50_BOARD="${GP50_BOARD:-0}" "$APP/start/app.ld" -o app.ld
+nds32le-elf-gcc -Os -nostartfiles -static -mcmodel=medium -mext-dsp -mvh -T app.ld -Wl,--gc-sections -Wl,-Map,app.map \
   $LF -o app.elf ./*.o -ldsp
 nds32le-elf-objcopy -O binary app.elf app.bin
 nds32le-elf-objdump -d app.elf > app.dis

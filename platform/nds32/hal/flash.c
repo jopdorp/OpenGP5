@@ -1,21 +1,5 @@
 #include "flash.h"
 
-#ifdef GP50_BOARD
-/* The GP-50 storage layout and flash driver are unverified. */
-uint32_t gp5_flash_id(void) { return 0; }
-uint32_t gp5_flash_status(void) { return 0; }
-int gp5_flash_read_cmd(uint32_t addr, uint32_t *dst, unsigned len)
-{
-    (void)addr; (void)dst; (void)len;
-    return -1;
-}
-int gp5_flash_erase(uint32_t addr) { (void)addr; return -1; }
-int gp5_flash_program(uint32_t addr, const uint32_t *src, unsigned len)
-{
-    (void)addr; (void)src; (void)len;
-    return -1;
-}
-#else
 #include <nds32_intrinsic.h>
 
 /* No EX9 / IFC compaction in this file: an ex9.it instruction executes an entry of a table that lives in
@@ -133,11 +117,10 @@ static int __attribute__((section(".ramfunc"), noinline)) flash_op(unsigned op, 
 /* Called through a pointer: a direct call from flash could not reach RAM. */
 static int (*volatile flash_op_ptr)(unsigned, uint32_t, const uint32_t *, unsigned, uint32_t *) = flash_op;
 
-#define WRITABLE      GP5_FLASH_AREA                  /* files A, store, files B: 0x13F000 .. 0x16FFFF */
-#define WRITABLE_SIZE GP5_FLASH_AREA_SIZE
 static int in_store(uint32_t addr, unsigned len)
 {
-    return addr >= WRITABLE && len <= WRITABLE_SIZE && addr - WRITABLE <= WRITABLE_SIZE - len;
+    return addr >= GP5_FLASH_AREA && len <= GP5_FLASH_AREA_SIZE &&
+           addr - GP5_FLASH_AREA <= GP5_FLASH_AREA_SIZE - len;
 }
 
 static void forget_cached(uint32_t addr, unsigned len)       /* the data cache may still hold the old bytes */
@@ -179,4 +162,3 @@ int gp5_flash_program(uint32_t addr, const uint32_t *src, unsigned len)
 }
 
 __asm__(".pushsection .ramfunc,\"ax\",@progbits\n\t.no_ifc_end\n\t.no_ex9_end\n\t.popsection");
-#endif
