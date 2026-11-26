@@ -109,7 +109,11 @@ static void audio_init(void) {
 #else
     REG(0x4000E01Cu) = 0x24F3200Fu;    /* entry 0: 44.1 kHz */
 #endif
-    REG(0x4000E020u) = REG(0x4000E020u) | 0x8u;
+#ifdef GP50_BOARD
+    REG(0x4000E020u) = (REG(0x4000E020u) & ~4u) | 8u; /* stock 0x788e selects the internal audio clock */
+#else
+    REG(0x4000E020u) |= 8u;
+#endif
     REG(0x4000E014u) = 0u;
     /* Configure and prefill the audio interface before enabling it. */
 #ifdef GP50_BOARD

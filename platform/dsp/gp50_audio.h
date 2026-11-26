@@ -45,7 +45,7 @@ static void gp50_dsp_clock(void)
         REG(0x4000E054u) = 0x03000F00u;
         gp50_delay(200);
     }
-    REG(0x4000E020u) = select | 2u;
+    REG(0x4000E020u) = (select & ~0x80400u) | 2u; /* stock 0x5bba clears the retained clock bits */
     REG(0x4000E014u) = 0;
     REG(0x4000E00Cu) = 0x0001FC3Fu;
 }

@@ -56,6 +56,8 @@ def main():
                        (0x40000000, 0x100000), (0x50000000, 0x1000), (0xE0000000, 0x100000)):
         mu.mem_map(base, size)
     mu.mem_write(0x4000, sec)
+    if a.gp50_raw:
+        mu.mem_write(0x4000E020, struct.pack("<I", 0x80404))  # retained clock selection
     rx, tx = bytearray(), bytearray()
     codec_frames = []
     codec_pins, codec_message, codec_bits, codec_value = 0, None, 0, 0
@@ -120,7 +122,7 @@ def main():
     if a.gp50_raw:
         check("configures the GP-50 clock and module gates",
               [reg(address) for address in (0x4000E054, 0x4000E058, 0x4000E05C, 0x4000E00C)] ==
-              [0x03000F00, 0x0B400000, 0x03002222, 0x1FC3F] and bool(reg(0x4000E020) & 2))
+              [0x03000F00, 0x0B400000, 0x03002222, 0x1FC3F] and (reg(0x4000E020) & 0x80402) == 2)
     r = send(bytes.fromhex("0060080000000000"))
     check("answers the version query", len(r) >= 16 and r[4:8] == bytes.fromhex("00600c00"),
           "version 0x%08x" % struct.unpack_from("<I", r, 12)[0] if len(r) >= 16 else r.hex())
@@ -133,6 +135,7 @@ def main():
         check("keeps audio off after a codec NACK", st(13) == 0 and reg(0x50000000) == 0)
     else:
         if a.gp50_raw:
+            check("selects the internal GP-50 audio clock", (reg(0x4000E020) & 0xE) == 0xA)
             check("configures both codecs", codec_frames == CODEC_WRITES.split(), " ".join(codec_frames))
             check("routes all four DMA channels to GP-50 FIFOs",
                   [reg(ADMA + offset) for offset in (0x148, 0x168, 0x10C, 0x12C)] ==
