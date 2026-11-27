@@ -66,13 +66,13 @@ static uint8_t crc8(uint8_t c, const uint8_t *d, unsigned n)
 
 /* Send one framed message (payload up to PROTO_REPLY_MAX bytes) as USB-MIDI SysEx packets, 64 bytes
  * (16 events) per bulk write. */
-void proto_reply(uint8_t cls, uint8_t index, const uint8_t *pl, unsigned len)
+bool proto_reply(uint8_t cls, uint8_t index, const uint8_t *pl, unsigned len)
 {
     static uint8_t body[4 + PROTO_REPLY_MAX], wire[2 + 2 * sizeof body];
     uint8_t pkt[64];
     unsigned i, n = 0, w = 0, left;
 
-    if (len > PROTO_REPLY_MAX) return;
+    if (len > PROTO_REPLY_MAX) return false;
     body[0] = 0; body[1] = cls; body[2] = index; body[3] = (uint8_t)len;
     for (i = 0; i < len; i++) body[4 + i] = pl[i];
     body[0] = crc8(0, body, 4 + len);            /* body[0] is 0 here, as the CRC's leading 00 */
@@ -88,16 +88,15 @@ void proto_reply(uint8_t cls, uint8_t index, const uint8_t *pl, unsigned len)
         pkt[n + 2] = left > 1 ? wire[i + 1] : 0;
         pkt[n + 3] = left > 2 ? wire[i + 2] : 0;
         n += 4;
-        if (n == sizeof pkt) { if (!usb_midi_write(pkt, n)) return; n = 0; }
+        if (n == sizeof pkt) { if (!usb_midi_write(pkt, n)) return false; n = 0; }
     }
-    if (n) usb_midi_write(pkt, n);
+    return !n || usb_midi_write(pkt, n);
 }
 
 static int frame_done(void)
 {
     uint8_t body[4 + PROTO_REQ_MAX];
     unsigned i, n = nnib / 2, len;
-    static const uint8_t ack[3] = { 0x14, 0x08, 0x00 };
 
     if ((nnib & 1) || n < 4) { proto_bad++; return PROTO_NONE; }
     for (i = 0; i < n; i++) body[i] = (uint8_t)((nib[2 * i] << 4) | nib[2 * i + 1]);
@@ -111,7 +110,13 @@ static int frame_done(void)
     proto_frames++;
 
     if (body[1] == 0x01 && len == 2 && body[4] == 0x11 && body[5] == 0x6F) {
-        proto_reply(0x01, 0, ack, 3);
+        static const uint8_t ack[3] = { 0x14, 0x08, 0x00 };
+        bool sent = proto_reply(0x01, 0, ack, 3);
+#ifdef GP50_BOARD
+        if (!sent) return PROTO_NONE;
+#else
+        (void)sent;
+#endif
         return PROTO_TO_LOADER;
     }
     if (body[1] == 0x01 && len >= 2 && len <= sizeof proto_req && body[4] == 0x7E) {

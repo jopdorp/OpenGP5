@@ -29,7 +29,11 @@
 #define ABUF 0x1001F400u /* 4 channels x 0x200 bytes, code RAM (unused by this firmware) */
 
 static const uint32_t ACH_DESC[4] = {ADMA + 0x140u, ADMA + 0x160u, ADMA + 0x100u, ADMA + 0x120u};
+#ifdef GP50_BOARD
+static const uint32_t ACH_FIFO[4] = {AIF + 0x0Cu, AIF + 0x10u, AIF + 0x14u, AIF + 0x18u};
+#else
 static const uint32_t ACH_FIFO[4] = {AIF + 0x34u, AIF + 0x38u, AIF + 0x3Cu, AIF + 0x40u};
+#endif
 static const uint32_t ACH_DONE[4] = {1u << 2, 1u << 3, 1u << 0, 1u << 1}; /* done bit = DMA channel index */
 #define a_half ST[16] /* half currently armed (0/1) - in the status block: no .bss here */
 #define a_done ST[17] /* done-flag accumulator */
@@ -62,6 +66,7 @@ static void audio_init(void) {
     REG(0xE0001004u) = 0;
     REG(0xE0001000u) |= 1u;            /* DWT cycle counter on */
 #endif
+#ifndef GP50_BOARD
     /* GPIO pad config (stock 0x5a54), 2 bits per pin. The resident's pre-boot init (0x6d0) leaves
      * +0x34 = 0x55557555; stock sets it back to 0x55555555 on every boot. Kept to match stock. It is
      * NOT what makes the input work: tested on hardware 2026-11-10, input stayed zero. */
@@ -79,6 +84,7 @@ static void audio_init(void) {
     REG(0x4000E02Cu) = (REG(0x4000E02Cu) & ~0x000040FFu) | 0xDBu;
     REG(0x4000E030u) = (REG(0x4000E030u) & ~0x067FEF7Fu) | 0x00796079u;
     REG(0x4000E024u) = (REG(0x4000E024u) & ~0x0000237Eu) | 0x114u;
+#endif
     /* zero both halves of all audio buffers */
     for (uint32_t a = ABUF; a < ABUF + 0x800u; a += 4) REG(a) = 0;
     /* audio DMA channel config (stock 0x77a4..0x77c6) */
@@ -103,14 +109,26 @@ static void audio_init(void) {
 #else
     REG(0x4000E01Cu) = 0x24F3200Fu;    /* entry 0: 44.1 kHz */
 #endif
-    REG(0x4000E020u) = REG(0x4000E020u) | 0x8u;
+#ifdef GP50_BOARD
+    REG(0x4000E020u) = (REG(0x4000E020u) & ~4u) | 8u; /* stock 0x788e selects the internal audio clock */
+#else
+    REG(0x4000E020u) |= 8u;
+#endif
     REG(0x4000E014u) = 0u;
-    /* audio interface on (stock 0x76b8): config, prefill FIFOs with zeros, enable */
+    /* Configure and prefill the audio interface before enabling it. */
+#ifdef GP50_BOARD
+    REG(AIF + 0x04) = 0x207Fu;
+    REG(AIF + 0x08) = 0x3FF0u;   /* configured fields from stock 0x7d20 */
+    for (int k = 0; k < 16; k++)
+        for (uint32_t r = 0x0C; r <= 0x40; r += 4) REG(AIF + r) = 0;
+    REG(AIF + 0x00) = 0x741Fu;
+#else
     REG(AIF + 0x04) = 0x7Fu;
     REG(AIF + 0x08) = 0x3FFFu;
     for (int k = 0; k < 8; k++)
         for (uint32_t r = 0x0C; r <= 0x40; r += 4) REG(AIF + r) = 0;
     REG(AIF + 0x00) = 0x8070741Bu;
+#endif
 }
 
 /* 1 once the control processor announced a hand-over to its loader (link command 0x7F05): the firmware's processing

@@ -12,10 +12,21 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 export PATH=$ROOT/fw-build/andes/v3s/nds32le-elf-mculib-v3s/bin:$PATH
 APP=$ROOT/platform/nds32
 FW=${GP5_FIRMWARE_DIR:-$ROOT/firmwares/${GP5_FIRMWARE:-passthrough}}/nds32     # the firmware's own UI / control code
-O=$APP/out; mkdir -p "$O/gen"; cd "$O"; rm -f ./*.o app.elf app.bin app.dis app.sym app.map app.ld init-default.c
+O=$APP/out
+if [ -n "${GP5_NDS32_OUT:-}" ]; then O=$ROOT/$GP5_NDS32_OUT
+elif [ "${GP50_BOARD:-0}" = 1 ]; then O=$O/gp50; fi
+mkdir -p "$O/gen"; cd "$O"; rm -f ./*.o app.elf app.bin app.dis app.sym app.map app.ld init-default.c
 INC="-I$APP -I$FW -I$FW/.. -I$APP/../dsp"   # $FW/..: the firmware's params.h (1.0)     # last: gp5_math.h / gp5_math.c, the maths both processors can use
 CF="-std=gnu99 -DUI_PANEL -mcpu=d1088-spu -mext-dsp -mext-zol -mcmodel=medium -Os -g -Wall -fmessage-length=0 -fsingle-precision-constant -ffunction-sections -fdata-sections $INC"
-if [ -n "${GP5_DEBUG_PEEK:-}" ]; then CF="$CF -DGP5_DEBUG_PEEK"; fi     # debug builds: 7E 0A / 7E 0B read registers over USB
+LF=
+BOARD=
+if [ "${GP50_BOARD:-0}" = 1 ]; then
+  CF="$CF -DGP50_BOARD=1"
+  LF="-Wl,--mno-ex9"
+  BOARD="$APP/gp50_controls.c"
+elif [ -n "${GP5_DEBUG_PEEK:-}" ]; then
+  CF="$CF -DGP5_DEBUG_PEEK"
+fi
 GEN=$O/gen                          # firmware.json -> flags + metadata block (platform/manifest.py, run by build_firmware.sh)
 [ -f "$GEN/manifest.flags" ] || { echo "no $GEN/manifest.flags: build with platform/build_firmware.sh (it reads firmware.json)"; exit 1; }
 CF="$CF $(cat "$GEN/manifest.flags")"; META="$GEN/gp5_meta.c"
@@ -23,14 +34,15 @@ CF="$CF $(cat "$GEN/manifest.flags")"; META="$GEN/gp5_meta.c"
 
 # Platform (start-up, drivers in hal/, USB-MIDI, DSP link, LEDs, screen) + the firmware's own code.
 for f in "$APP/main.c" "$APP/led.c" "$APP/usb_midi.c" "$APP/proto.c" "$APP/dsp_link.c" "$APP/dsp_ctl.c" "$APP/hal/gpio.c" "$APP/hal/wdg.c" "$APP/hal/spim.c" "$APP/hal/adc.c" "$APP/hal/uart0.c" "$APP/hal/timer.c" "$APP/hal/tick.c" "$APP/hal/backlight.c" "$APP/hal/clock.c" "$APP/hal/usb.c" "$APP/hal/flash.c" "$APP/hal/spis.c" "$APP/audio_link.c" "$APP/text.c" "$APP/gp5_store.c" "$APP/gp5_files.c" "$APP/gp5_params.c" "$APP/gp5_ui.c" "$APP/gp5_log.c" ${META:+"$META"} "$FW"/*.c \
-         "$APP/start/vectors.S" "$APP/start/startup.c" "$APP/start/irq.c" "$APP/start/cache.c"; do
+         "$APP/start/vectors.S" "$APP/start/startup.c" "$APP/start/irq.c" "$APP/start/cache.c" ${BOARD:+"$BOARD"}; do
   b=$(basename "$f"); X=
   [ "$b" = cache.c ] && X=-mno-ext-zol      # no hardware-loop registers touched on the way to the factory loader
   [ "$b" = flash.c ] && X=-fno-toplevel-reorder   # keeps its no-EX9 / no-IFC brackets around the code
   nds32le-elf-gcc $CF $X -I"$APP/start" -c "$f" -o "${b%.*}.o"
 done
-nds32le-elf-gcc -Os -nostartfiles -static -mcmodel=medium -mext-dsp -mvh -T "$APP/start/app.ld" -Wl,--gc-sections -Wl,-Map,app.map \
-  -o app.elf ./*.o -ldsp
+nds32le-elf-gcc -E -P -x c -DGP50_BOARD="${GP50_BOARD:-0}" "$APP/start/app.ld" -o app.ld
+nds32le-elf-gcc -Os -nostartfiles -static -mcmodel=medium -mext-dsp -mvh -T app.ld -Wl,--gc-sections -Wl,-Map,app.map \
+  $LF -o app.elf ./*.o -ldsp
 nds32le-elf-objcopy -O binary app.elf app.bin
 nds32le-elf-objdump -d app.elf > app.dis
 nds32le-elf-nm -n app.elf > app.sym

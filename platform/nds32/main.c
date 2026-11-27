@@ -51,14 +51,22 @@ unsigned gp5_log_read(uint32_t from, uint8_t *out, unsigned max, uint32_t *at, u
 static int api_store_changed(uint32_t id);              /* the firmware's callbacks: below */   /* the manifest's metadata block (out/gen/gp5_meta.c), if any */
 #include "led.h"
 
-
 #define DC_PIN   GP5_PIN(7)    /* A7  low = command (the SPIM port-0 MISO pin, taken back as GPIO) */
+#ifdef GP50_BOARD
+#include "gp50_controls.h"
+#define CS_PIN   GP5_PIN(16)
+#define RST_PIN  GP5_PIN(6)    /* port B */
+#define LCD_PINS (DC_PIN | CS_PIN)
+#define LCD_RST_OUT GP5_GPIO_B_OUT
+#else
 #define CS_PIN   GP5_PIN(9)    /* A9  low = selected */
 #define RST_PIN  GP5_PIN(16)   /* A16 low = reset */
 #define LCD_PINS (DC_PIN | CS_PIN | RST_PIN)
+#define LCD_RST_OUT GP5_GPIO_A_OUT
+#endif
 
-#define W 160
-#define H 80
+#define W GP5_SCREEN_W
+#define H GP5_SCREEN_H
 
 /* Busy-loop delay. Sized for the PLL clock (100,000 a millisecond at 288 MHz); if the PLL did not lock (12 MHz RC)
  * it only runs long, never short. */
@@ -80,6 +88,16 @@ static void out_pin(uint32_t mask)
 
 static void board_init(void)
 {
+#ifdef GP50_BOARD
+    /* V1.0.5 board init drives A22 low before enabling the Run outputs. */
+    const uint32_t a22 = GP5_PIN(22);
+    gp5_gpio_a_digital(22);
+    gp5_reg_bits_clear(GP5_GPIO_A_OUT, a22);
+    gp5_reg_bits_clear(GP5_GPIO_A_IE, a22);
+    gp5_reg_bits_set(GP5_GPIO_A_PU, a22);
+    gp5_reg_bits_set(GP5_GPIO_A_PD, a22);
+    gp5_reg_bits_set(GP5_GPIO_A_OE, a22);
+#else
     /* 0x47d90: A24 then A22 as outputs; A22 high, A24 low */
     out_pin(GP5_PIN(24));
     out_pin(GP5_PIN(22));
@@ -106,19 +124,36 @@ static void board_init(void)
     gp5_reg_bits_clear(GP5_GPIO_B_IE, GP5_PIN(5));
     gp5_reg_bits_set(GP5_GPIO_B_OE, GP5_PIN(5));
     gp5_reg_bits_clear(GP5_GPIO_B_OUT, GP5_PIN(5));
+#endif
 
     /* 0x47e20: SPIM on port 0 (A5/A6/A7), THEN A7 (the port's MISO) back to GPIO for DC */
     gp5_spim_pins_port0();
     out_pin(DC_PIN);
     out_pin(CS_PIN);
+#ifdef GP50_BOARD
+    out_pin(GP5_PIN(24));
+    gp5_reg_bits_clear(GP5_GPIO_A_OUT, GP5_PIN(24));
+    gp5_reg_bits_clear(GP5_GPIO_A_IE, GP5_PIN(24));
+    gp5_reg_bits_clear(GP5_GPIO_A_PU, GP5_PIN(24));
+    gp5_reg_bits_set(GP5_GPIO_A_PD, GP5_PIN(24));
+    gp5_reg_bits_set(GP5_GPIO_A_OE, GP5_PIN(24));
+    gp5_reg_bits_set(GP5_GPIO_B_OUT, RST_PIN);
+    gp5_reg_bits_set(GP5_GPIO_B_PU, RST_PIN);
+    gp5_reg_bits_clear(GP5_GPIO_B_PD, RST_PIN);
+    gp5_reg_bits_clear(GP5_GPIO_B_IE, RST_PIN);
+    gp5_reg_bits_set(GP5_GPIO_B_OE, RST_PIN);
+#else
     out_pin(RST_PIN);
+#endif
     gp5_reg_bits_set(GP5_GPIO_A_PU, LCD_PINS);
     gp5_reg_bits_clear(GP5_GPIO_A_PD, LCD_PINS);
     gp5_reg_bits_clear(GP5_GPIO_A_IE, LCD_PINS);
     gp5_reg_bits_set(GP5_GPIO_A_OE, LCD_PINS);
     gp5_reg_bits_set(GP5_GPIO_A_OUT, DC_PIN);
     gp5_reg_bits_set(GP5_GPIO_A_OUT, CS_PIN);
+#ifndef GP50_BOARD
     gp5_reg_bits_set(GP5_GPIO_A_OUT, RST_PIN);
+#endif
 }
 
 /* 0x48590 + 0x485ec: backlight = TIMER5 PWM on A10, duty in percent */
@@ -132,8 +167,11 @@ static void backlight(unsigned percent)
  * Only the main loop starts the IRQ; a faulted LED driver never re-enables it. */
 static void lcd_pin(uint32_t pins, int high)
 {
+#ifndef GP50_BOARD
     if (gp5_led_status == 1) gp5_reg_set(high ? GP5_GPIO_A_SET : GP5_GPIO_A_CLR, pins);
-    else if (high) gp5_reg_bits_set(GP5_GPIO_A_OUT, pins);
+    else
+#endif
+    if (high) gp5_reg_bits_set(GP5_GPIO_A_OUT, pins);
     else gp5_reg_bits_clear(GP5_GPIO_A_OUT, pins);
 }
 
@@ -155,38 +193,68 @@ static void lcd_dat(uint8_t *b, unsigned n)
 
 /* stock init sequence (@0x48330) as {cmd, n_args, args...}; n_args 0xFF ends */
 static const uint8_t initseq[] = {
-    0x11, 0,  0x21, 0,
+    0x11, 0,
+#ifndef GP50_BOARD
+    0x21, 0,
+#endif
     0xB1, 3, 0x05,0x3A,0x3A,  0xB2, 3, 0x05,0x3A,0x3A,
     0xB3, 6, 0x05,0x3A,0x3A,0x05,0x3A,0x3A,  0xB4, 1, 0x03,
     0xC0, 3, 0x62,0x02,0x04,  0xC1, 1, 0xC0,  0xC2, 2, 0x0D,0x00,
-    0xC3, 2, 0x8D,0x6A,  0xC4, 2, 0x8D,0xEE,  0xC5, 1, 0x0E,
+    0xC3, 2, 0x8D,0x6A,  0xC4, 2, 0x8D,0xEE,
+#ifdef GP50_BOARD
+    0xC5, 1, 0x12,
+    0xE0, 16, 0x03,0x1B,0x12,0x11,0x3F,0x3A,0x32,0x34,0x2F,0x2B,0x30,0x3A,0x00,0x01,0x02,0x05,
+    0xE1, 16, 0x03,0x1B,0x12,0x11,0x32,0x2F,0x2A,0x2F,0x2E,0x2C,0x35,0x3F,0x00,0x00,0x01,0x05,
+    /* Reverse both axes in the panel because OpenGP5 draws unrotated pixels. */
+    0x36, 1, 0xA8,  0x3A, 1, 0x55,  0x2C, 0,
+#else
+    0xC5, 1, 0x0E,
     0xE0, 16, 0x10,0x0E,0x02,0x03,0x0E,0x07,0x02,0x07,0x0A,0x12,0x27,0x37,0x00,0x0D,0x0E,0x10,
     0xE1, 16, 0x10,0x0E,0x03,0x03,0x0F,0x06,0x02,0x08,0x0A,0x13,0x26,0x36,0x00,0x0D,0x0E,0x10,
     0x3A, 1, 0x05,  0x36, 1, 0xA0,  0x28, 0,  0x29, 0,     /* 0x36 = 0xA0: rotation; colour order bit clear (0xA8 swapped red and blue) */
+#endif
     0x00, 0xFF
 };
+
+static void fill_rect(unsigned x, unsigned y, unsigned w, unsigned h, uint16_t c);
 
 static void panel_init(void)
 {
     uint8_t args[16];
     const uint8_t *p = initseq;
-    gp5_reg_bits_set(GP5_GPIO_A_OUT, RST_PIN);   delay_ms(1);
-    gp5_reg_bits_clear(GP5_GPIO_A_OUT, RST_PIN); delay_ms(1);
-    gp5_reg_bits_set(GP5_GPIO_A_OUT, RST_PIN);   delay_ms(120);
+    gp5_reg_bits_set(LCD_RST_OUT, RST_PIN);   delay_ms(1);
+    gp5_reg_bits_clear(LCD_RST_OUT, RST_PIN); delay_ms(1);
+    gp5_reg_bits_set(LCD_RST_OUT, RST_PIN);
+#ifdef GP50_BOARD
+    delay_ms(130);
+#else
+    delay_ms(120);
+#endif
     for (;;) {
         uint8_t cmd = p[0], n = p[1], i;
         if (n == 0xFF) break;
         lcd_cmd(cmd);
+#ifdef GP50_BOARD
+        if (cmd == 0x11) delay_ms(120);
+#endif
         for (i = 0; i < n; i++) args[i] = p[2 + i];   /* SPIM_Send takes a non-const buffer */
         if (n) lcd_dat(args, n);
         p += 2 + n;
     }
+#ifdef GP50_BOARD
+    delay_ms(10);
+    fill_rect(0, 0, W, H, 0);
+    lcd_cmd(0x29);
+    delay_ms(100);
+#endif
 }
 
 static void set_window(unsigned x0, unsigned x1, unsigned y0, unsigned y1)
 {
     uint8_t a[4];
+#ifndef GP50_BOARD
     x0 += 1; x1 += 1; y0 += 26; y1 += 26;             /* panel offsets (stock fill_rect @0x48268) */
+#endif
     lcd_cmd(0x2A); a[0] = x0 >> 8; a[1] = x0; a[2] = x1 >> 8; a[3] = x1; lcd_dat(a, 4);
     lcd_cmd(0x2B); a[0] = y0 >> 8; a[1] = y0; a[2] = y1 >> 8; a[3] = y1; lcd_dat(a, 4);
     lcd_cmd(0x2C);
@@ -214,9 +282,10 @@ static void fill_rect(unsigned x, unsigned y, unsigned w, unsigned h, uint16_t c
 
 static void draw_logo(void)
 {
+    const unsigned logo_h = 80, y0 = (H - logo_h) / 2;
     unsigned r = 0, left = boot_logo[0].count, x, y;
-    set_window(0, W - 1, 0, H - 1);
-    for (y = 0; y < H; y++) {
+    set_window(0, W - 1, y0, y0 + logo_h - 1);
+    for (y = 0; y < logo_h; y++) {
         for (x = 0; x < W; x++) {
             uint16_t c = boot_logo[r].colour;
             row[2 * x] = (uint8_t)(c >> 8); row[2 * x + 1] = (uint8_t)c;
@@ -232,7 +301,7 @@ static void draw_logo(void)
 #define CW 12
 #define CH 16
 #define COLS 13
-#define ROWS 5
+#define ROWS (H / CH)
 static uint8_t cell[CW * CH * 2];
 
 static void draw_char(unsigned col, unsigned line, char ch, uint16_t fg, uint16_t bg)
@@ -278,6 +347,7 @@ static char *hex(char *p, uint32_t v, unsigned digits)
 /* Control map, confirmed on hardware with an input monitor (2026-11-09) */
 #define DEBOUNCE_MS 30u          /* foot switch and PARA push: ignore contact bounce this long after a change */
 #define AUDIO_WAIT_MS 3000u                   /* the most the sound waits for the start-up settings */
+#ifndef GP50_BOARD
 #define FOOT_PIN  GP5_PIN(17)    /* port A: foot switch, active low */
 #define PARA_PIN  GP5_PIN(6)     /* port B: PARA knob push button, active low */
 #define ENC_PINS  (GP5_PIN(2) | GP5_PIN(3))   /* port B: PARA knob quadrature (both high at a detent) */
@@ -304,6 +374,7 @@ static void io_init(void)
     gp5_reg_bits_set(GP5_GPIO_A_OE, LED_PINS);
     gp5_reg_bits_clear(GP5_GPIO_A_OUT, LED_PINS);
 }
+#endif
 
 /* Progress marker for the debugger: read `gp5_stage` (address in out/app.sym) after a halt. */
 volatile uint32_t gp5_stage;
@@ -323,6 +394,7 @@ static uint8_t sat8(uint32_t v) { return v > 255 ? 255 : (uint8_t)v; }
  * (0x5a450: clock divider 7, Vref 1, mode 0, calibration; 0x47ce8: analog enable for A28;
  * 0x47d10 every 10 ms: filt = (sample + 3 * filt) / 4, a new value is taken when it differs from the
  * last one by 64 or more at once, or by 16 or more for over 20 readings). Value = 12 bits >> 4. */
+#ifndef GP50_BOARD
 static uint32_t knob_filt, knob_last;
 static uint8_t knob_cnt;
 
@@ -345,9 +417,14 @@ static void knob_poll(void)
 }
 
 static unsigned knob_value(void) { return (knob_last >> 4) & 0xFF; }
+#else
+static unsigned knob_value(void) { return 255u; }
+#endif
 
 /* Host commands 7E 01 .. 7E 05 (proto.c); the request is in proto_req. */
+#ifndef GP50_BOARD
 static uint8_t dsp_raw[DSP_RAW_MAX];     /* payload staged by 7E 03, sent by 7E 04 */
+#endif
 static void host_dsp_cmd(void)
 {
     static uint8_t pl[PROTO_REPLY_MAX];
@@ -365,6 +442,7 @@ static void host_dsp_cmd(void)
         pl[n++] = sat8(dsp_acks); pl[n++] = sat8(dsp_naks); pl[n++] = (uint8_t)dsp_irq_off;
         pl[n++] = (uint8_t)dsp_rx_bytes; pl[n++] = (uint8_t)(dsp_rx_bytes >> 8);
         for (i = 0; i < dsp_unsol_len; i++) pl[n++] = dsp_unsol[i];
+#ifndef GP50_BOARD
     } else if (proto_req[1] == 0x02 && proto_req_len == 5) {
         uint8_t args[6] = { 8, 0, 0, 0, 0, 0 };
         args[2] = proto_req[4];
@@ -446,6 +524,7 @@ static void host_dsp_cmd(void)
         }
         dsp_link_rx_reset();                         /* interrupts were off: the DSP link's receiver may be stuck */
         n = 3;
+#endif
     } else if (proto_req[1] == 0x0D && proto_req_len == 2) {
         /* who is this: 7E 0D -> 7E 0D 1 <platform major minor patch> <firmware name, ASCII, zero-terminated> */
         const char *nm = fw_name();
@@ -513,7 +592,12 @@ static void host_dsp_cmd(void)
         uint32_t v[15], k;
         static const uint8_t reset_dsp[6] = { 8, 0, 1, 0, 0, 0 };   /* [len u16][1]: the payload's own length first */
         int reset = proto_req_len == 3 && proto_req[2] == 1;
-        unsigned got = dsp_link_query(0x7F04, reset ? reset_dsp : 0, reset ? 6u : 0u, rep, sizeof rep, 30);
+        const uint8_t *request = reset ? reset_dsp : 0;
+#ifdef GP50_BOARD
+        static const uint8_t audio_dsp[6] = { 8, 0, 2, 0, 0, 0 };
+        if (proto_req_len == 3 && proto_req[2] == 2) request = audio_dsp;
+#endif
+        unsigned got = dsp_link_query(0x7F04, request, request ? 6u : 0u, rep, sizeof rep, 30);
         loop_skip = 1;
         v[0] = GP5_CTL_MHZ * 1000000u / GP5_SAMPLE_RATE * 64u; v[1] = gp5_link_cycles; v[2] = gp5_link_worst; v[3] = loop_worst;
         v[4] = (uint32_t)((uintptr_t)_end - 0x20004000u); v[5] = 0x44000u - 0x20u;
@@ -535,8 +619,13 @@ static void host_dsp_cmd(void)
     } else if (proto_req[1] == 0x0F && proto_req_len == 2) {
         /* the controls (platform 0.5.2): 7E 0F -> 7E 0F 1 <volume knob 0..255> <foot switch 0/1> <PARA pushed 0/1>
          * (the knob as filtered for fw_knob; the switches as read now, not debounced) */
+#ifdef GP50_BOARD
+        pl[2] = 1; pl[3] = (uint8_t)knob_value(); pl[4] = !(gp50_control_input & GP50_FS1_BIT);
+        pl[5] = !(gp5_reg_get(GP5_GPIO_A_IN) & GP50_PARA_PIN); n = 6;
+#else
         uint32_t a = gp5_reg_get(GP5_GPIO_A_IN), b = gp5_reg_get(GP5_GPIO_B_IN);
         pl[2] = 1; pl[3] = (uint8_t)knob_value(); pl[4] = !(a & FOOT_PIN); pl[5] = !(b & PARA_PIN); n = 6;
+#endif
     } else if (proto_req[1] == 0x10 && proto_req_len == 8) {
         /* a setting of the running firmware, live (platform 0.5.4): 7E 10 <id u16> <value u32> -> 7E 10 <1 if taken>
          * (fw_param_set; firmwares without it answer 0) */
@@ -591,6 +680,10 @@ __attribute__((weak)) void fw_para_up(void) {}
 __attribute__((weak)) void fw_para_click(void) {}
 __attribute__((weak)) void fw_para_hold(void) {}
 __attribute__((weak)) void fw_para_turn(int detents) { (void)detents; }
+#ifdef GP50_BOARD
+__attribute__((weak)) void fw_gp50_encoder_turn(unsigned encoder, int detents) { (void)encoder; (void)detents; }
+__attribute__((weak)) void fw_gp50_button(unsigned button, int down) { (void)button; (void)down; }
+#endif
 __attribute__((weak)) void fw_storage_changed(void) {}
 __attribute__((weak)) void fw_dsp_ready(void) {}
 __attribute__((weak)) int fw_take(uint32_t *id, uint32_t *value) { (void)id; (void)value; return 0; }
@@ -608,7 +701,9 @@ static void api_para(int down)
     fw_para_up();
 }
 static void api_para_poll(int down) { if (down && !para_held && gp5_ms() - para_t0 >= PARA_HOLD_MS) { para_held = 1; fw_para_hold(); } }
+#ifndef GP50_BOARD
 static uint32_t api_led_now(void) { return api_led; }
+#endif
 static int api_draw(unsigned knob, int force) { (void)knob; return fw_draw(force); }
 static int api_store_changed(uint32_t id) { (void)id; fw_storage_changed(); return 1; }
 
@@ -623,10 +718,15 @@ static int enc;
 static unsigned enc_lab;
 static void enc_poll(void)
 {
+#ifdef GP50_BOARD
+    unsigned ab = (gp5_reg_get(GP5_GPIO_B_IN) >> 2) & 3;
+    enc += gp50_encoder_delta(enc_lab, ab);
+#else
     /* quadrature step table, index = (previous AB << 2) | current AB */
     static const int8_t qstep[16] = { 0,1,-1,0, -1,0,0,1, 1,0,0,-1, 0,-1,1,0 };
     unsigned ab = (gp5_reg_get(GP5_GPIO_B_IN) >> 2) & 3;
     enc += qstep[(enc_lab << 2) | ab];
+#endif
     enc_lab = ab;
 }
 
@@ -641,6 +741,9 @@ void gp5_blit(unsigned x, unsigned y, unsigned w, unsigned h, const uint16_t *px
     for (j = 0; j < h; j++) {
         lcd_dat((uint8_t *)(px + j * w), w * 2);
         enc_poll();
+#ifdef GP50_BOARD
+        gp50_controls_sample();
+#endif
     }
 }
 
@@ -661,17 +764,25 @@ static void clear_screen(void)
 static void monitor(void)
 {
     uint16_t white = rgb(255,255,255), black = rgb(0,0,0), yellow = rgb(255,255,0), green = rgb(0,255,0);
-    uint32_t a, b;
+    uint32_t a;
+#ifndef GP50_BOARD
+    uint32_t b;
+#endif
     uint32_t rx = 0, usb = 0, lusb = ~0u;
     uint32_t dsp_ver = 0, dsp_next = 0, dsp_tries = 0;
     uint32_t knob_next = 0, fx_next = 0;
+#ifndef GP50_BOARD
     uint32_t fx_startup_acked = 0, fx_all;  /* decorative LEDs wait for every initial setting */
+#endif
     /* The sound stays muted (output level 0) until the DSP has every setting the firmware starts with: otherwise the
      * first moments play the DSP's defaults, or the guitar dry. Unmuted once nothing is left to send after the DSP's
      * start-up, or AUDIO_WAIT_MS after it at the latest; the DSP then fades in. */
     int audio_on = 0;
     uint32_t audio_wait = 0;
-    unsigned knob = 0, lstep = ~0u, knob_reads = 0;
+    unsigned knob = 0, lstep = ~0u;
+#ifndef GP50_BOARD
+    unsigned knob_reads = 0;
+#endif
     int dsp_show = 0, host_asked, status = 0;
     uint32_t t_start;
     int det, ldet = 0, foot, para, lfoot = 0, lpara = 0, gfx = 0, gforce = 0;
@@ -688,16 +799,23 @@ static void monitor(void)
     enc_lab = (gp5_reg_get(GP5_GPIO_B_IN) >> 2) & 3;
     __nds32__mtsr(1u, NDS32_SR_PFM_CTL);             /* performance counter 0 counts cycles (the load report) */
     __nds32__isb();
+#ifndef GP50_BOARD
     gp5_storage_claim();                             /* gp5_files.c: storage belongs to this firmware (0.5) */
+#else
+    api_knob = knob_value();
+#endif
     gp5_log("OpenGP5 %s, firmware %s, control processor %u MHz, %u Hz", GP5_VERSION_TEXT, fw_name(), (unsigned)GP5_CTL_MHZ, (unsigned)GP5_SAMPLE_RATE);
 #ifdef GP5_HAS_PARAMS
     gp5_params_init();                               /* defaults, then what was saved */
+#endif
     fw_init();
+#ifndef GP50_BOARD
+#ifdef GP5_HAS_PARAMS
     fx_all = gp5_params_dsp_mask();
 #else
-    fw_init();
     n = fw_setting_count();
     fx_all = n >= 32 ? 0xFFFFFFFFu : (1u << n) - 1u;
+#endif
 #endif
 
     for (;;) {
@@ -707,7 +825,11 @@ static void monitor(void)
             c_prev = c; loop_skip = 0;           /* (not the pass that answered 7E 14: it waited for the DSP) */
         }
         a = gp5_reg_get(GP5_GPIO_A_IN);
+#ifdef GP50_BOARD
+        gp50_controls_sample();
+#else
         b = gp5_reg_get(GP5_GPIO_B_IN);
+#endif
         enc_poll();
         ab = enc_lab;
 
@@ -718,6 +840,12 @@ static void monitor(void)
             int r;
             if (mbuf[i] & 0x0F) rx = ((uint32_t)mbuf[i + 1] << 16) | ((uint32_t)mbuf[i + 2] << 8) | mbuf[i + 3];
             r = proto_feed(mbuf + i);
+#ifdef GP50_BOARD
+            if (r == PROTO_TO_LOADER) {
+                gp50_controls_prepare_update();
+                loader_handover();
+            }
+#else
             if (r == PROTO_TO_LOADER) {
                 put_line(4, "TO LOADER", yellow, black);
                 /* The DSP goes quiet first (its firmware's processing paused, plain passthrough): the loader talks
@@ -738,6 +866,7 @@ static void monitor(void)
                 *(volatile uint32_t *)0x40022008u = 1;   /* system reset (the vendor's Reset_McuSystem) */
                 for (;;) ;
             }
+#endif
             if (r == PROTO_DSP) {
                 if (proto_req[1] == 0x00) host_asked = 1;
                 else host_dsp_cmd();
@@ -764,11 +893,19 @@ static void monitor(void)
         }
         /* volume knob every 10 ms; start-up sync, then knob changes, to the DSP */
         if ((int32_t)(gp5_ms() - knob_next) >= 0) {
+#ifdef GP50_BOARD
+            gp50_power_poll();
+            gp50_expression_poll();
+            knob = knob_value();
+            knob_next = gp5_ms() + 10;
+            api_tick(knob);
+#else
             knob_poll();
             knob = knob_value();
             knob_next = gp5_ms() + 10;
             /* the first readings ramp up from 0 (filter start): not a turn of the knob */
             if (knob_reads < 60) knob_reads++; else api_tick(knob);
+#endif
         }
         dsp_ctl_poll(dsp_ver != 0, audio_on ? api_level_now() : 0u);
         if (dsp_ctl_step != lstep) {
@@ -796,7 +933,9 @@ static void monitor(void)
                 pl[0] = 0x10; pl[1] = 0x7F; pl[2] = 12; pl[3] = 0;
                 for (i = 0; i < 4; i++) { pl[4 + i] = (uint8_t)(id >> (8 * i)); pl[8 + i] = (uint8_t)(val >> (8 * i)); }
                 dsp_link_raw(pl, sizeof pl, rep, sizeof rep, 100, &st);
+#ifndef GP50_BOARD
                 if (st == 0x14 && id < 32) fx_startup_acked |= 1u << id;
+#endif
                 fx_next = gp5_ms() + 20;
             } else if (!audio_on) {
                 audio_on = 1;                            /* every start-up setting is with the DSP: sound on */
@@ -833,7 +972,12 @@ static void monitor(void)
 
         /* Switch contacts bounce for a few ms: take a change at once, then ignore the switch for DEBOUNCE_MS so
          * the bounce cannot add a second press (or cancel the first); a change that outlasts it is taken then. */
+#ifdef GP50_BOARD
+        foot = !(gp50_control_input & GP50_FS1_BIT); para = !(a & GP50_PARA_PIN);
+        gp50_controls_dispatch();
+#else
         foot = !(a & FOOT_PIN); para = !(b & PARA_PIN);
+#endif
         if (foot != lfoot && (int32_t)(gp5_ms() - foot_quiet) >= 0) {
             midi_send(foot ? 0x90 : 0x80, 60, foot ? 100 : 0);
             api_foot(foot);
@@ -847,20 +991,30 @@ static void monitor(void)
             para_quiet = gp5_ms() + DEBOUNCE_MS;
         }
         api_para_poll(lpara);
+#ifdef GP50_BOARD
+        det = enc;
+#else
         det = enc >> 1;                              /* a detent every 2 quadrature steps: at 11 and at 00 */
+#endif
         if ((ab == 3 || ab == 0) && det != ldet) {
             midi_send(0xB0, 16, (uint8_t)(det & 0x7F));
             fw_para_turn(det - ldet);
             ldet = det;
         }
 
+#ifndef GP50_BOARD
         led_set_effect(api_led_now());
+#endif
 
         /* The graphic effect screen takes over once the DSP is in sync (one band per pass); until then,
          * and for good if the sync fails, the text lines above and the USB line below stay. */
         if (!gfx && dsp_ctl_step == DSP_CTL_DONE) { gfx = 1; gforce = 1; clear_screen(); }
         if (gfx) {
+#ifdef GP50_BOARD
+            api_draw(knob, gforce);
+#else
             if (!api_draw(knob, gforce) && (fx_startup_acked & fx_all) == fx_all) led_start();
+#endif
             gforce = 0;
         } else if (status) {
             usb = ((uint32_t)usb_midi_configured() << 31) ^ (usb_setups << 24) ^ rx;
@@ -887,11 +1041,15 @@ int main(void)
     gp5_stage = 2;
 
     board_init();
+#ifdef GP50_BOARD
+    gp50_controls_init();
+#else
     io_init();
     if (HANDOVER_MARK[0] == HANDOVER_MAGIC && HANDOVER_MARK[1] == ~HANDOVER_MAGIC) {
         HANDOVER_MARK[0] = 0; HANDOVER_MARK[1] = 0;      /* once only */
         loader_handover();                       /* the host asked for update mode before this restart */
     }
+#endif
     gp5_stage = 3;
 
     gp5_spim_clear_int();
@@ -904,7 +1062,9 @@ int main(void)
     draw_logo();
     gp5_stage = 6;
 
+#ifndef GP50_BOARD
     gp5_reg_bits_set(GP5_GPIO_A_OUT, GP5_PIN(15));   /* 0x47fa4 */
+#endif
     backlight(0);                                /* the logo fades in: about 0.6 s, eased for the eye */
     for (unsigned n = 1; n <= 50; n++) {
         gp5_backlight_duty(n * n / 25);
@@ -921,7 +1081,11 @@ int main(void)
     gp5_stage = 8;
     usb_midi_init();                             /* attaches to the host (D+ pull-up) */
     dsp_link_init();
+#ifdef GP50_BOARD
+    gp50_analog_init();
+#else
     knob_init();
+#endif
     gp5_stage = 9;
     monitor();
     return 0;

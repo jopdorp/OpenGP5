@@ -44,6 +44,7 @@ import argparse
 import json
 import struct
 import sys
+import zipfile
 from pathlib import Path
 
 MAGIC = 0x57465448  # 'HTFW'
@@ -95,6 +96,30 @@ def parse(blob: bytes):
         entries=entries, payload_base=payload_base,
         header=blob[:HEADER_LEN],
     )
+
+
+def read_section(path, kind):
+    """Read a checksummed section from an uncompressed update or its enclosing ZIP."""
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            members = [name for name in archive.namelist() if name.lower().endswith(".bin")]
+            if len(members) != 1:
+                raise ValueError("expected one firmware .bin in the ZIP")
+            blob = archive.read(members[0])
+    else:
+        blob = path.read_bytes()
+    header = parse(blob)
+    if header["comp_flag"] or header["size_field"] != len(blob):
+        raise ValueError("expected a complete, uncompressed HTFW image")
+    entries = [entry for entry in header["entries"] if entry["type"] == kind]
+    if len(entries) != 1:
+        raise ValueError(f"expected one 0x{kind:02x} section")
+    entry = entries[0]
+    start = header["payload_base"] + entry["doff"]
+    section = blob[start:start + entry["dlen"]]
+    if len(section) != entry["dlen"] or stored_crc(section) != entry["crc"]:
+        raise ValueError(f"invalid length or CRC in 0x{kind:02x} section")
+    return header["product"], section
 
 
 def cmd_info(args):
@@ -149,40 +174,33 @@ def cmd_unpack(args):
     print(f"unpacked {len(h['entries'])} sections to {outdir}/ (+ manifest.json)")
 
 
+def pack_uncompressed(header, sections):
+    """Build an HTFW container from (type, flash address, pad, payload) records in order."""
+    header = bytearray(header)
+    if len(header) != HEADER_LEN:
+        raise ValueError("header must be 0x38 bytes")
+    if header[0x21]:
+        raise ValueError("compressed images are unsupported")
+    table, payload = bytearray(), bytearray()
+    for typ, flash, pad, data in sections:
+        table += struct.pack("<HBBIII", stored_crc(data), pad, typ, flash, len(payload), len(data))
+        payload += data
+    header[0x22] = len(table) // ENTRY_LEN
+    struct.pack_into("<I", header, 0x08, HEADER_LEN + len(table) + len(payload))
+    struct.pack_into("<I", header, 0x24, len(payload))
+    return bytes(header + table + payload)
+
+
 def cmd_pack(args):
     srcdir = Path(args.indir)
     manifest = json.loads((srcdir / "manifest.json").read_text())
     if manifest.get("comp_flag"):
         sys.exit("error: manifest marks a compressed image - repack of compressed payloads is not supported yet")
-    header = bytearray(bytes.fromhex(manifest['header_hex']))
-    if len(header) != HEADER_LEN:
-        sys.exit("error: header in manifest is not 0x38 bytes")
-    secs = manifest['sections']
-    header[0x22] = len(secs)  # section count
-
-    # Build payloads and table
-    payload = bytearray()
-    entries = []
-    doff = 0
-    for s in secs:
-        data = (srcdir / s['file']).read_bytes()
-        entries.append(dict(crc=stored_crc(data), pad=s.get('pad', 0),
-                            type=s['type'], flash=s['flash'], doff=doff, dlen=len(data)))
-        payload += data
-        doff += len(data)
-
-    table = bytearray()
-    for e in entries:
-        table += struct.pack("<HBBIII", e['crc'], e['pad'], e['type'], e['flash'], e['doff'], e['dlen'])
-
-    payload_len = len(payload)
-    total = HEADER_LEN + len(table) + payload_len
-    struct.pack_into("<I", header, 0x08, total)        # size field
-    struct.pack_into("<I", header, 0x24, payload_len)  # payload length
-
-    out = bytes(header) + bytes(table) + bytes(payload)
+    sections = manifest["sections"]
+    out = pack_uncompressed(bytes.fromhex(manifest["header_hex"]),
+        ((s["type"], s["flash"], s.get("pad", 0), (srcdir / s["file"]).read_bytes()) for s in sections))
     Path(args.out).write_bytes(out)
-    print(f"packed {len(secs)} sections -> {args.out} ({total} bytes, 0x{total:x})")
+    print(f"packed {len(sections)} sections -> {args.out} ({len(out)} bytes, {len(out):#x})")
 
 
 def cmd_replace_section(args):

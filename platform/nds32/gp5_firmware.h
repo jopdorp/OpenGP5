@@ -23,7 +23,11 @@
 #endif
 
 #define GP5_SCREEN_W 160
+#ifdef GP50_BOARD
+#define GP5_SCREEN_H 128
+#else
 #define GP5_SCREEN_H 80
+#endif
 
 /* ---- implemented by the firmware ---- */
 /* Every callback is optional: the platform has an empty default for each. All run in the main loop, so none of them may wait. */
@@ -38,6 +42,13 @@ void fw_para_up(void);
 void fw_para_click(void);                 /* ... a push let go before 0.6 s (called just before fw_para_up) */
 void fw_para_hold(void);                  /* ... held for 0.6 s (called once while it is still held; no click follows) */
 void fw_para_turn(int detents);           /* PARA turned, +/- clicks */
+#ifdef GP50_BOARD
+enum { GP50_ENCODER_LEFT, GP50_ENCODER_MIDDLE, GP50_ENCODER_RIGHT };
+enum { GP50_BUTTON_DRUM, GP50_BUTTON_EXIT, GP50_BUTTON_GLOBAL, GP50_BUTTON_SAVE, GP50_BUTTON_FS2 };
+void fw_gp50_encoder_turn(unsigned encoder, int detents);
+void fw_gp50_button(unsigned button, int down);
+void fw_gp50_expression(unsigned value);  /* EXP/FS jack in expression mode, 0..255 */
+#endif
 void fw_storage_changed(void);            /* the computer changed this firmware's files or store records: read them again */
 /* A firmware without params.h sends settings to the DSP through fw_take / fw_setting_count / fw_dsp_ready and gives
  * the computer live access through fw_param_get / fw_param_set (below; all optional). With params.h the platform does
@@ -50,6 +61,18 @@ int fw_param_get(uint32_t id, uint32_t *value);
 int fw_param_set(uint32_t id, uint32_t value);
 
 /* ---- provided by the platform (1.0) ---- */
+#ifdef GP50_BOARD
+#define GP50_HAS_STATUS 1
+enum { GP50_BT_OFF, GP50_BT_UNPAIRED, GP50_BT_PAIRED };
+typedef struct {
+    int battery;                    /* 0–4 bars, or -1 before the first sample */
+    int charging;                   /* 0 or 1, or -1 before the first sample */
+    unsigned bluetooth;             /* radio off, searching, or a live classic/BLE link */
+} gp50_status_t;
+gp50_status_t gp50_status(void);    /* cached readings, no ADC wait */
+int gp50_expression_read_raw(unsigned *value);                  /* 1 if a physical ADC sample is available */
+int gp50_expression_set_range(unsigned heel, unsigned toe);    /* effective ADC bounds, in RAM only */
+#endif
 unsigned gp5_knob(void);                  /* the volume knob, 0..255 (filtered) */
 void gp5_level_own(int own);              /* 1: the firmware sets the output level (gp5_level_set); 0 (the default):
                                              the volume knob is the output level */
@@ -81,7 +104,7 @@ uint32_t gp5_ms(void);                    /* milliseconds since start */
 #endif
 /* Send w x h pixels (RGB565, big-endian bytes as the panel wants them) to the screen at x, y. */
 void gp5_blit(unsigned x, unsigned y, unsigned w, unsigned h, const uint16_t *px);
-/* One of five 13-character text lines in the built-in 5x7 pixel font, white on black. For smooth text in any font
+/* A 13-character text line in the built-in 5x7 pixel font, white on black. For smooth text in any font
  * and size, anywhere on the screen: gp5_font.h (gp5_text_at, gp5_draw_text) and docs/platform/fonts.md. */
 void gp5_text(unsigned line, const char *s);
 

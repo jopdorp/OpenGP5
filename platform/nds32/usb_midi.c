@@ -40,7 +40,11 @@ static const uint8_t config_desc[83] = {
 };
 
 static const uint8_t lang_id[4] = { 0x04, 0x03, 0x09, 0x04 };
+#ifdef GP50_BOARD
+static const char *const strings[] = { 0, "GP-50 Open", "GP-50 Open FW", "0008", 0, "GP-50 Open MIDI" };
+#else
 static const char *const strings[] = { 0, "GP-5 Open", "GP-5 Open FW", "0008", 0, "GP-5 Open MIDI" };
+#endif
 
 static uint8_t setup[8];
 static uint8_t ctl_buf[64];

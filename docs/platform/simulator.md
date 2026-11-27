@@ -46,12 +46,14 @@ One line per action, the time in seconds first:
 | `para click`, `para hold` | push PARA and let go after 0.1 s / 0.8 s (`para down` / `para up`: one edge) |
 | `para turn N` | turn PARA N clicks (negative: back) |
 | `knob N` | the volume knob, 0..255 |
+| `expression N` | normalized GP-50 expression position, 0..255 (requires `--gp50`) |
 | `set NAME VALUE` | a parameter, as Launchpad sets it: by the name shown (`Loop_level` for "Loop level") or the code's (`LOOPLV`); a choice by its name |
 | `preset load N`, `preset save N` | presets, numbered from 1 as on the pedal |
 | `shot NAME` | the screen now, as `NAME.png` |
 | `storage changed` | as when a computer changed the firmware's files |
 
 While it runs, it prints the log (`gp5_log` on either processor, the DSP's lines marked `dsp:`) and every LED change.
+Scripted expression positions are already normalized. Setting an ADC range validates the bounds, and raw ADC samples are unavailable.
 At the end, the tool reports the largest screen update from one `fw_draw` call.
 On the pedal, that transfer takes time in a main-loop pass. Draw a strip at a time to leave room for other work.
 OpenGP5 examples send up to about 8 KB of the 25.6 KB screen in a pass. The tool reports the first full draw as a separate value.

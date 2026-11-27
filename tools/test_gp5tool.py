@@ -1,8 +1,9 @@
 """Offline tests for gp5tool.py against a simulated pedal; never opens a MIDI port."""
-import struct, unittest
+import runpy, struct, unittest
 from pathlib import Path
 
 import gp5tool
+import htfw
 from gp5tool import Problem, MODE_OPEN, MODE_STOCK, MODE_LOADER, MODE_SILENT
 from gp5_proto import build_sysex, parse_sysex, CLASS_CMD, CLASS_DATA, CHUNK
 
@@ -116,6 +117,17 @@ def tiny_dsp():
     return bytes(d)
 
 
+def tiny_gp50_programs():
+    app = bytearray(tiny_app())
+    template = ROOT / "platform" / "nds32" / "header_a4_ff.bin"
+    app[0xA4:0x108] = template.read_bytes() + bytes.fromhex("ff ff ff 00 ff ff dd 9e")
+    app[0x108:0x115] = b"GP-50 Open FW"
+    dsp = bytearray(tiny_dsp().ljust(0xB874, b"\xff"))
+    dsp[8:12] = b"V105"
+    struct.pack_into("<I", dsp, 0x404, 0x4501)
+    return app, dsp
+
+
 class PartialImages(unittest.TestCase):
     """This project's images: only the sections we build, no Valeton file needed."""
     def test_pack_then_load(self):
@@ -139,6 +151,33 @@ class PartialImages(unittest.TestCase):
         base = gp5tool.make_image({0x62: tiny_app(), 0x63: tiny_dsp()})
         out = gp5tool.combine(base, {0x62: tiny_app(0x300)})
         self.assertEqual(dict(gp5tool.inspect(out)[0])[0x62], tiny_app(0x300))
+
+
+class GP50Package(unittest.TestCase):
+    def test_gp50_container_preserves_payloads_and_refuses_foreign_dsp(self):
+        pack = runpy.run_path(str(ROOT / "platform" / "nds32" / "pack.py"))["gp50_image"]
+        app, dsp = tiny_gp50_programs()
+        image = pack(app, dsp)
+        header = htfw.parse(image)
+        self.assertEqual(header["product"], "GP-50")
+        self.assertEqual(header["size_field"], len(image))
+        self.assertEqual([(entry["type"], entry["flash"]) for entry in header["entries"]],
+                         [(0x63, 0x200000), (0x62, 0)])
+        cursor = header["payload_base"]
+        for entry, payload in zip(header["entries"], (dsp, app)):
+            self.assertEqual(entry["doff"], cursor - header["payload_base"])
+            self.assertEqual(entry["dlen"], len(payload))
+            self.assertEqual(entry["crc"], htfw.stored_crc(payload))
+            self.assertEqual(image[cursor:cursor + len(payload)], payload)
+            cursor += len(payload)
+        self.assertEqual(cursor, len(image))
+        with self.assertRaisesRegex(Problem, "expected an uncompressed GP-5"):
+            gp5tool.inspect(image)
+        with self.assertRaisesRegex(ValueError, "GP-50 V1.0.5"):
+            pack(app, tiny_dsp())
+        struct.pack_into("<I", dsp, 0x404, 0x5001)
+        with self.assertRaisesRegex(ValueError, "reset vector"):
+            pack(app, dsp)
 
 
 @NEED_STOCK

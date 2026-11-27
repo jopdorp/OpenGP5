@@ -9,17 +9,27 @@
 #define PRESC   (T5 + 0x10)
 #define OUTMODE (T5 + 0x1C)      /* 16-bit; bits 9-12: output type */
 #define COMPARE (T5 + 0x24)      /* output is active while the counter is below this */
-#define PIN_MUX 0x400100ECu      /* bits 8-11: function of A10 (5 = timer 5 output) */
+#ifdef GP50_BOARD
+#define PIN_MUX 0x400100F4u      /* A24: timer 5 output */
+#define PIN_MASK 0x0000000Fu
+#define PIN_PWM  0x0000000Au
+#else
+#define PIN_MUX 0x400100ECu      /* A10: timer 5 output */
+#define PIN_MASK 0x00000F00u
+#define PIN_PWM  0x00000500u
 #define PWM_PD  0x400100D0u      /* bit 2: pull-down-current drive for this output (off) */
+#endif
 
 void gp5_backlight_pin(int pwm)
 {
     if (pwm) {
-        W(PIN_MUX) &= ~0x00000F00u;
-        W(PIN_MUX) |= 0x00000500u;
+        W(PIN_MUX) &= ~PIN_MASK;
+        W(PIN_MUX) |= PIN_PWM;
     } else {
-        W(PIN_MUX) &= ~0x00000F00u;
+        W(PIN_MUX) &= ~PIN_MASK;
+#ifndef GP50_BOARD
         W(PWM_PD) &= ~0x00000004u;
+#endif
     }
 }
 

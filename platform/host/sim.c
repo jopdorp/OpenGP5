@@ -24,6 +24,12 @@
 #include "gp5_firmware.h"
 #include "gp5_fmt.h"
 #include "gp5_font.h"
+#ifdef GP50_BOARD
+#include "gp50_controls.h"
+
+int gp50_expression_read_raw(unsigned *value) { (void)value; return 0; }
+int gp50_expression_set_range(unsigned heel, unsigned toe) { return gp50_expression_range_valid(heel, toe); }
+#endif
 #ifdef GP5_HAS_PARAMS
 #include "gp5_params.h"
 void gp5_params_init(void);
@@ -50,6 +56,11 @@ __attribute__((weak)) void fw_para_up(void) {}
 __attribute__((weak)) void fw_para_click(void) {}
 __attribute__((weak)) void fw_para_hold(void) {}
 __attribute__((weak)) void fw_para_turn(int detents) { (void)detents; }
+#ifdef GP50_BOARD
+__attribute__((weak)) void fw_gp50_encoder_turn(unsigned encoder, int detents) { (void)encoder; (void)detents; }
+__attribute__((weak)) void fw_gp50_button(unsigned button, int down) { (void)button; (void)down; }
+__attribute__((weak)) void fw_gp50_expression(unsigned value) { (void)value; }
+#endif
 __attribute__((weak)) void fw_storage_changed(void) {}
 __attribute__((weak)) void fw_dsp_ready(void) {}
 __attribute__((weak)) int fw_take(uint32_t *id, uint32_t *value) { (void)id; (void)value; return 0; }
@@ -281,6 +292,11 @@ int main(int argc, char **argv)
             else if (!strcmp(next_op, "para_down")) { para_down = 1; para_held = 0; para_t0 = now_ms; fw_para_down(); }
             else if (!strcmp(next_op, "para_up")) { if (para_down && !para_held) fw_para_click(); para_down = 0; fw_para_up(); }
             else if (!strcmp(next_op, "turn")) fw_para_turn((int)a1);
+#ifdef GP50_BOARD
+            else if (!strcmp(next_op, "encoder")) fw_gp50_encoder_turn((unsigned)a1, (int)a2);
+            else if (!strcmp(next_op, "button")) fw_gp50_button((unsigned)a1, (int)a2);
+            else if (!strcmp(next_op, "expression")) fw_gp50_expression((unsigned)a1);
+#endif
             else if (!strcmp(next_op, "knob")) knob = (unsigned)(a1 < 0 ? 0 : a1 > 255 ? 255 : a1);
 #ifdef GP5_HAS_PARAMS
             else if (!strcmp(next_op, "set")) { if (a1 < GP5_NPARAMS) gp5_params_set_outside((unsigned)a1, (int32_t)a2); else fw_param_set((uint32_t)a1, (uint32_t)a2); }
@@ -343,8 +359,8 @@ int main(int argc, char **argv)
     }
     while (fw_draw(force)) force = 0;
     shot(argv[5], "end");
-    fprintf(stderr, "screen: at most %lu bytes sent in one fw_draw call while running (one main-loop pass; the whole screen is 25,600;"
-                    " the first full draw: %lu)\n", blit_most, blit_first);
+    fprintf(stderr, "screen: at most %lu bytes sent in one fw_draw call while running (one main-loop pass; the whole screen is %u;"
+                    " the first full draw: %lu)\n", blit_most, 2u * GP5_SCREEN_W * GP5_SCREEN_H, blit_first);
     if (strcmp(argv[7], "-")) store_file(argv[7], 1);
     fclose(fout);
     return 0;

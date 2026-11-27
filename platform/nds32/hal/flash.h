@@ -5,13 +5,19 @@
 /* Writing the control processor's own SPI flash, our own driver (see hal/gpio.h for how these are written;
  * the command sequences follow what the vendor driver was observed to do, docs: platform/README.md).
  *
- * Only the storage area can be erased or written: 0x13F000 .. 0x189FFF, from the end of Valeton's app (0x13E168
+ * On GP-5, only the storage area can be erased or written: 0x13F000 .. 0x189FFF, from the end of Valeton's app (0x13E168
  * on V1.0.6) through Valeton's user-preset area, which belongs to whichever firmware is installed
  * (docs/platform/storage.md): FILES run A (0x13F000 .. 0x15FFFF, gp5_files.c), the STORE (two 4 KB sectors at
  * 0x160000, gp5_store.c) and FILES run B (0x162000 .. 0x189FFF). Every other address is refused, so the factory loader (0x0 .. 0xFFFF), the app and Valeton's data are out of reach. The flash commands run from RAM with interrupts off (the app itself runs from this flash); an
- * erase holds the processor for up to a few hundred ms, a 256-byte page for about 1 ms. */
-#define GP5_FLASH_STORE      0x160000u
+ * erase holds the processor for up to a few hundred ms, a 256-byte page for about 1 ms.
+ * GP-50 writes are limited to the journal inside the stock app span. */
 #define GP5_FLASH_STORE_SIZE 0x2000u
+#ifdef GP50_BOARD
+#define GP5_FLASH_STORE      0x163000u
+#define GP5_FLASH_AREA       GP5_FLASH_STORE
+#define GP5_FLASH_AREA_SIZE  GP5_FLASH_STORE_SIZE
+#else
+#define GP5_FLASH_STORE      0x160000u
 #define GP5_FLASH_DATA       0x162000u
 #define GP5_FLASH_DATA_SIZE  0xE000u
 #define GP5_FLASH_FILES_A    0x13F000u
@@ -20,6 +26,7 @@
 #define GP5_FLASH_FILES_B_SIZE 0x28000u                                  /* 0x162000 .. 0x189FFF, 40 sectors */
 #define GP5_FLASH_AREA       GP5_FLASH_FILES_A                         /* everything writable, A .. B */
 #define GP5_FLASH_AREA_SIZE  (GP5_FLASH_FILES_B + GP5_FLASH_FILES_B_SIZE - GP5_FLASH_FILES_A)
+#endif
 #define GP5_FLASH_SECTOR     0x1000u
 #define GP5_FLASH_PAGE       0x100u
 

@@ -13,6 +13,19 @@
 #include "gp5_firmware.h"
 #include "hal/flash.h"
 
+#ifdef GP50_BOARD
+const uint8_t *gp5_file(uint32_t firm, const char *name, uint32_t *len)
+{
+    (void)firm; (void)name; (void)len;
+    return 0;
+}
+int gp5_file_check(uint32_t firm, const char *name) { (void)firm; (void)name; return 0; }
+unsigned gp5_file_each(uint32_t firm, void (*fn)(const char *, const uint8_t *, uint32_t, void *), void *ctx)
+{
+    (void)firm; (void)fn; (void)ctx;
+    return 0;
+}
+#else
 #define MAGIC 0x46355047u                            /* "GP5F" */
 #define HDR 64u
 #ifndef FILE_BYTE                                    /* how the area is read: memory-mapped (a host test maps it) */
@@ -139,3 +152,4 @@ unsigned gp5_file_each(uint32_t firm, void (*fn)(const char *name, const uint8_t
         }
     return n;
 }
+#endif
